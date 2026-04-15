@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/* ── Milkdown headless styles ── */
+
+.milkdown-root {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.milkdown-root:hover {
+  scrollbar-color: rgba(155, 155, 155, 0.3) transparent;
+}
+.milkdown-root::-webkit-scrollbar { width: 4px; }
+.milkdown-root::-webkit-scrollbar-track { background: transparent; }
+.milkdown-root::-webkit-scrollbar-thumb { background: transparent; border-radius: 2px; }
+.milkdown-root:hover::-webkit-scrollbar-thumb { background: rgba(155, 155, 155, 0.3); }
+
+/* Prosemirror base */
+.ProseMirror {
+  outline: none;
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100%;
+}
+
+.ProseMirror > * + * {
+  margin-top: 0.5em;
+}
+
+/* Headings */
+.ProseMirror h1 { font-size: 1.5em; font-weight: 700; margin: 0.5em 0 0.25em; }
+.ProseMirror h2 { font-size: 1.25em; font-weight: 700; margin: 0.5em 0 0.25em; }
+.ProseMirror h3 { font-size: 1.1em; font-weight: 600; margin: 0.5em 0 0.25em; }
+
+/* Blockquote — the signature dragged-content style */
+.ProseMirror blockquote {
+  border-left: 4px solid #6366f1; /* indigo-500 */
+  background: rgba(99, 102, 241, 0.05);
+  padding: 8px 12px;
+  margin: 8px 0;
+  border-radius: 0 4px 4px 0;
+  color: #4b5563; /* gray-600 */
+}
+
+/* Images */
+.ProseMirror img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 8px 0;
+}
+.ProseMirror img:hover {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.4);
+}
+
+/* Code */
+.ProseMirror code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+.ProseMirror pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.ProseMirror pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Lists */
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 4px 0;
+}
+
+/* Horizontal rule */
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 12px 0;
+}
+
+/* Links */
+.ProseMirror a {
+  color: #6366f1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Dark mode ── */
+
+@media (prefers-color-scheme: dark) {
+  .ProseMirror h1, .ProseMirror h2, .ProseMirror h3 {
+    color: #e5e7eb;
+  }
+  .ProseMirror blockquote {
+    background: rgba(99, 102, 241, 0.1);
+    color: #9ca3af;
+  }
+  .ProseMirror code {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .ProseMirror hr {
+    border-top-color: #374151;
+  }
+  .ProseMirror a {
+    color: #818cf8;
+  }
+}

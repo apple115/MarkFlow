@@ -1,0 +1,9 @@
+node_modules/
+.output/
+.wxt/
+*.crx
+*.zip
+dist/
+/.test-user-data/
+/test-results/
+/tests/
