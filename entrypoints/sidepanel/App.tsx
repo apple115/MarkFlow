@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useMilkdown } from './useMilkdown';
 import { downloadLogs } from './logger';
 
@@ -10,20 +10,14 @@ export default function App() {
 
   const hasContent = !loading && handle != null && !handle.isEmpty();
 
-  // Update char count on content change
-  const charCountInterval = useCallback(() => {
+  // Update char count periodically
+  useEffect(() => {
     if (!handle) return;
     const id = setInterval(() => {
-      const md = handle.getMarkdown();
-      setCharCount(md.length);
+      setCharCount(handle.getMarkdown().length);
     }, 500);
     return () => clearInterval(id);
   }, [handle]);
-
-  // Start polling when handle becomes available
-  if (handle && !charCountInterval) {
-    charCountInterval();
-  }
 
   const handleCopy = useCallback(async () => {
     if (!handle) return;
@@ -61,7 +55,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       {/* Header */}
-      <header className="flex items-center justify-between h-12 px-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
+      <header className="flex items-center justify-between h-8 px-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
         <span
           className={`w-2 h-2 rounded-full ${
             hasContent ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
@@ -127,7 +121,7 @@ export default function App() {
       </div>
 
       {/* Footer */}
-      <footer className="flex items-center justify-between h-6 px-4 text-[10px] text-gray-400 dark:text-gray-600 border-t border-gray-100 dark:border-gray-800 shrink-0">
+      <footer className="flex items-center justify-between h-8 px-4 text-[10px] text-gray-400 dark:text-gray-600 border-t border-gray-100 dark:border-gray-800 shrink-0">
         <span>{charCount} chars</span>
         <span>Alt+S to toggle</span>
       </footer>

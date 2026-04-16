@@ -1,4 +1,7 @@
 export default defineBackground(() => {
+  // Click icon to toggle sidepanel
+  browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
   // Store pending metadata from content scripts, keyed by tabId
   const pendingMeta = new Map<number, PageMeta>();
 

@@ -73,11 +73,15 @@ export async function processDrop(
     return;
   }
 
-  // 2. URI list (could be image or link)
+  // 2. URI list (could be video, image or link)
   if (uriList) {
     const url = uriList.split('\n')[0].trim();
     log.info('processDrop: branch URI-LIST, url =', url);
-    if (isImageUrl(url, html)) {
+    if (isVideoUrl(url)) {
+      log.info('processDrop: detected as video URL');
+      const md = buildVideoMarkdown(url, meta);
+      insertMarkdown(view, parseMarkdown, md, pos?.pos);
+    } else if (isImageUrl(url, html)) {
       log.info('processDrop: detected as image URL');
       const result = await fetchImageViaBg(url);
       log.info('processDrop: image fetch result =', result?.error ?? 'ok');
@@ -99,6 +103,15 @@ export async function processDrop(
   // 3. HTML content
   if (html) {
     log.info('processDrop: branch HTML');
+    if (isHtmlVideo(html)) {
+      const src = extractVideoSrc(html);
+      log.info('processDrop: HTML contains video, src =', src);
+      if (src) {
+        const md = buildVideoMarkdown(src, meta);
+        insertMarkdown(view, parseMarkdown, md, pos?.pos);
+        return;
+      }
+    }
     if (isHtmlImage(html)) {
       const src = extractImageSrc(html);
       log.info('processDrop: HTML contains img, src =', src);
@@ -188,6 +201,36 @@ function buildImageMarkdown(base64: string, mimeType: string, meta: PendingMeta 
 }
 
 // ── Type detection ──
+
+// ── Type detection ──
+
+function isVideoUrl(url: string): boolean {
+  const videoExts = ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv'];
+  const lower = url.toLowerCase().split('?')[0].split('#')[0];
+  return videoExts.some((ext) => lower.endsWith(ext));
+}
+
+function isHtmlVideo(html: string): boolean {
+  return /<video\b/i.test(html);
+}
+
+function extractVideoSrc(html: string): string | null {
+  // <video src="...">
+  const direct = html.match(/<video[^>]+src=["']([^"']+)["']/i);
+  if (direct) return direct[1];
+  // <video><source src="...">
+  const source = html.match(/<source[^>]+src=["']([^"']+)["']/i);
+  return source?.[1] ?? null;
+}
+
+function buildVideoMarkdown(url: string, meta: PendingMeta | null): string {
+  const lines = [`> [▶ Video](${url})`];
+  if (meta) {
+    lines.push('', `*[${meta.time}] from: ${meta.siteName}*`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
 
 function isImageUrl(url: string, html?: string): boolean {
   const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];

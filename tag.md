@@ -1,5 +1,18 @@
 # MarkFlow 更新日志
 
+## v0.3.0 (2026-04-16)
+
+### 新增
+- 点击扩展图标开关侧边栏（openPanelOnActionClick）
+- 视频拖拽支持，输出 `[▶ Video](url)` 链接格式
+
+### 修复
+- 修复字符计数始终为 0 的问题（useCallback → useEffect）
+- 修复图片 fetch 返回 undefined 时的崩溃
+- Header 和 Footer 统一高度为 h-8
+- Copy 按钮去掉 disabled 条件
+- Background SW 添加日志便于排查
+
 ## v0.2.0 (2026-04-16)
 
 ### 新增
