@@ -8,6 +8,7 @@ export default defineBackground(() => {
   // Listen for metadata from content scripts on dragstart
   browser.runtime.onMessage.addListener((message, sender) => {
     if (message.type === 'dragstart-meta' && sender.tab?.id != null) {
+      console.log('[MarkFlow BG] Received dragstart-meta from tab', sender.tab.id, message.meta);
       pendingMeta.set(sender.tab.id, message.meta);
     }
 
@@ -23,12 +24,14 @@ export default defineBackground(() => {
     }
 
     if (message.type === 'get-pending-meta') {
+      console.log('[MarkFlow BG] get-pending-meta requested, map size =', pendingMeta.size, 'keys =', [...pendingMeta.keys()]);
       // Sidepanel sends messages — sender.tab may be null in that context.
       // Try tabId first, then fall back to returning the most recent meta.
       const tabId = sender.tab?.id;
       if (tabId != null && pendingMeta.has(tabId)) {
         const meta = pendingMeta.get(tabId)!;
         pendingMeta.delete(tabId);
+        console.log('[MarkFlow BG] → returning meta for tab', tabId);
         return Promise.resolve(meta);
       }
       // Fallback: return the last stored meta from any tab, then clear it
@@ -36,8 +39,10 @@ export default defineBackground(() => {
       if (!lastEntry.done) {
         const [id, meta] = lastEntry.value;
         pendingMeta.delete(id);
+        console.log('[MarkFlow BG] → returning fallback meta from tab', id);
         return Promise.resolve(meta);
       }
+      console.log('[MarkFlow BG] → no meta available, returning null');
       return Promise.resolve(null);
     }
   });

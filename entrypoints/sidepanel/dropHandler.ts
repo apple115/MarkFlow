@@ -1,6 +1,7 @@
 import type { EditorView } from '@milkdown/kit/prose/view';
 import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import { log } from './logger';
+import { settings } from './settings';
 
 export interface PendingMeta {
   url: string;
@@ -55,6 +56,27 @@ export async function processDrop(
     log.info('processDrop: meta =', meta);
   } catch (err) {
     log.warn('processDrop: fetchPendingMeta failed:', err);
+  }
+
+  // Fallback: if no meta from content script, build from active tab URL
+  if (!meta) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.url) {
+        const url = new URL(tab.url);
+        meta = {
+          url: tab.url,
+          title: tab.title || url.hostname,
+          siteName: url.hostname,
+          author: null,
+          favicon: tab.favIconUrl || null,
+          time: new Date().toLocaleString(),
+        };
+        log.info('processDrop: fallback meta from active tab:', meta);
+      }
+    } catch (err) {
+      log.warn('processDrop: active tab fallback failed:', err);
+    }
   }
 
   // 1. Files (desktop drag)
@@ -175,27 +197,21 @@ function insertMarkdown(
 
 function buildTextMarkdown(text: string, meta: PendingMeta | null): string {
   const lines = [`> ${text}`];
-  if (meta) {
-    lines.push('', `*[${meta.time}] from: ${meta.siteName}*`);
-  }
+  appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
 }
 
 function buildLinkMarkdown(text: string, url: string, meta: PendingMeta | null): string {
   const lines = [`> [${text}](${url})`];
-  if (meta) {
-    lines.push('', `*[${meta.time}] from: ${meta.siteName}*`);
-  }
+  appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
 }
 
 function buildImageMarkdown(base64: string, mimeType: string, meta: PendingMeta | null): string {
   const lines = [`![image](data:${mimeType};base64,${base64})`];
-  if (meta) {
-    lines.push('', `*[${meta.time}] from: ${meta.siteName}*`);
-  }
+  appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
 }
@@ -225,11 +241,19 @@ function extractVideoSrc(html: string): string | null {
 
 function buildVideoMarkdown(url: string, meta: PendingMeta | null): string {
   const lines = [`> [▶ Video](${url})`];
-  if (meta) {
-    lines.push('', `*[${meta.time}] from: ${meta.siteName}*`);
-  }
+  appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
+}
+
+function appendMeta(lines: string[], meta: PendingMeta | null): void {
+  if (!meta) return;
+  const parts: string[] = [];
+  if (settings.includeTime) parts.push(meta.time);
+  if (settings.includeSource) parts.push(`from: ${meta.siteName}`);
+  if (parts.length > 0) {
+    lines.push('', `*${parts.join(' • ')}*`);
+  }
 }
 
 function isImageUrl(url: string, html?: string): boolean {

@@ -1,5 +1,28 @@
 # MarkFlow 更新日志
 
+## v0.4.0 (2026-04-16)
+
+### 新增
+- 设置面板：齿轮按钮 → 下拉菜单 → 拖拽设置 Modal
+- 拖拽设置：可选包含时间/来源，保存后生效
+- Metadata fallback：content script 未发送时自动从活动标签页获取 URL/标题
+- 视频 URL 拖拽识别，输出 `[▶ Video](url)` 格式
+- 点击扩展图标开关侧边栏
+- Modal 弹窗从阴影浮现动画（blur + scale + fade）
+- 按钮 active 按压反馈（scale 90% + 半透明回弹）
+- 下拉菜单弹性展开动画（overshoot 缓动）
+- 齿轮旋转动效
+
+### 优化
+- Copy 按钮改为图标，与 Clear/Settings 统一风格
+- Header/Footer 统一高度 h-8
+- 下载日志移入设置菜单
+- 字符计数改用 useEffect 修复始终为 0
+
+### 修复
+- 图片 fetch 返回 undefined 时的崩溃
+- Metadata 管线全链路日志（content script + background + sidepanel）
+
 ## v0.3.0 (2026-04-16)
 
 ### 新增

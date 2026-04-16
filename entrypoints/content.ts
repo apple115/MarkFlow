@@ -3,6 +3,7 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   main() {
+    console.log('[MarkFlow CS] Content script loaded on', window.location.href);
     document.addEventListener('dragstart', () => {
       const meta = {
         url: window.location.href,
@@ -13,8 +14,12 @@ export default defineContentScript({
         favicon: getFavicon(),
         time: new Date().toLocaleString(),
       };
-
-      browser.runtime.sendMessage({ type: 'dragstart-meta', meta });
+      console.log('[MarkFlow CS] dragstart → sending meta:', meta);
+      browser.runtime.sendMessage({ type: 'dragstart-meta', meta }).then(() => {
+        console.log('[MarkFlow CS] meta sent OK');
+      }).catch((err: any) => {
+        console.error('[MarkFlow CS] meta send FAILED:', err);
+      });
     });
   },
 });
