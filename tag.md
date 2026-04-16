@@ -1,5 +1,20 @@
 # MarkFlow 更新日志
 
+## v0.2.0 (2026-04-16)
+
+### 新增
+- 环形缓冲区日志系统（100KB 上限，新日志覆盖旧的）
+- 日志下载按钮，方便排查问题
+- GitHub Actions CI（push/PR 自动 typecheck + build）
+- GitHub Actions Release（打 tag 自动 build + zip + 发布）
+
+### 修复
+- 移除 `stopPropagation()` 修复编辑器无法输入的问题
+- 同步读取 DataTransfer 数据，修复 Chrome 清空拖拽数据的 bug
+- 修复 `fetchImageViaBg` 返回 undefined 时的崩溃问题
+- Header 去除重复的 MarkFlow 标题
+- Copy 按钮去掉 disabled 条件
+
 ## v0.1.0 (2026-04-16)
 
 ### 新增
