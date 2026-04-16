@@ -12,6 +12,7 @@ import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { history } from '@milkdown/kit/plugin/history';
 import { clipboard } from '@milkdown/kit/plugin/clipboard';
 import { processDrop } from './dropHandler';
+import { log } from './logger';
 
 export interface MilkdownHandle {
   getMarkdown: () => string;
@@ -65,7 +66,7 @@ export function useMilkdown(): {
       handleRef.current = h;
       setLoading(false);
       setHandle(h);
-      console.log('[MarkFlow] Milkdown editor initialized');
+      log.info('Milkdown editor initialized');
     });
 
     // ── DOM-level drop handler ──
@@ -80,13 +81,13 @@ export function useMilkdown(): {
 
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
-      console.log('[MarkFlow] DOM drop event fired', {
+      log.info('DOM drop event fired', {
         types: e.dataTransfer?.types,
         files: e.dataTransfer?.files?.length,
       });
 
       if (!editorRef.current || !ctxRef.current) {
-        console.error('[MarkFlow] Editor not ready for drop');
+        log.error('Editor not ready for drop');
         return;
       }
 
@@ -96,15 +97,15 @@ export function useMilkdown(): {
         const parse = ctx.get(parserCtx);
 
         if (view.dragging !== null) {
-          console.log('[MarkFlow] Internal editor drag, skipping');
+          log.info('Internal editor drag, skipping');
           return;
         }
 
         processDrop(e, view, parse).catch((err) => {
-          console.error('[MarkFlow] processDrop error:', err);
+          log.error('processDrop error:', err);
         });
       } catch (err) {
-        console.error('[MarkFlow] Drop handler error:', err);
+        log.error('Drop handler error:', err);
       }
     };
 

@@ -9,7 +9,14 @@ export default defineBackground(() => {
     }
 
     if (message.type === 'fetch-image') {
-      return handleImageFetch(message.url);
+      console.log('[MarkFlow BG] fetch-image request:', message.url);
+      return handleImageFetch(message.url).then((result) => {
+        console.log('[MarkFlow BG] fetch-image result:', result.error ?? 'ok');
+        return result;
+      }).catch((err) => {
+        console.error('[MarkFlow BG] fetch-image error:', err);
+        return { error: String(err) };
+      });
     }
 
     if (message.type === 'get-pending-meta') {

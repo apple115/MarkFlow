@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useMilkdown } from './useMilkdown';
+import { downloadLogs } from './logger';
 
 export default function App() {
   const { rootRef, handle, loading } = useMilkdown();
@@ -69,12 +70,24 @@ export default function App() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
-            disabled={!hasContent || status === 'copying'}
             className="px-3 py-1 text-xs font-medium text-white bg-indigo-600 rounded-md
-                       hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed
-                       transition-colors"
+                       hover:bg-indigo-700 transition-colors"
           >
             {status === 'copied' ? 'Copied' : 'Copy'}
+          </button>
+          <button
+            onClick={downloadLogs}
+            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            title="Download logs"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
           </button>
           <button
             onClick={handleClear}

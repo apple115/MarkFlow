@@ -1,5 +1,6 @@
 import type { EditorView } from '@milkdown/kit/prose/view';
 import type { Node as ProseNode } from '@milkdown/kit/prose/model';
+import { log } from './logger';
 
 export interface PendingMeta {
   url: string;
@@ -22,10 +23,10 @@ export async function processDrop(
   view: EditorView,
   parseMarkdown: ParseMarkdown,
 ): Promise<void> {
-  console.log('[MarkFlow] processDrop START');
+  log.info('processDrop START');
 
   if (!event.dataTransfer) {
-    console.log('[MarkFlow] processDrop: no dataTransfer, abort');
+    log.info('processDrop: no dataTransfer, abort');
     return;
   }
 
@@ -40,25 +41,25 @@ export async function processDrop(
   const textPlain = dt.getData('text/plain');
   const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
 
-  console.log('[MarkFlow] processDrop: types =', dt.types);
-  console.log('[MarkFlow] processDrop: files =', files.length);
-  console.log('[MarkFlow] processDrop: pos =', pos?.pos);
-  console.log('[MarkFlow] processDrop: textPlain =', textPlain?.slice(0, 100));
-  console.log('[MarkFlow] processDrop: html =', html?.slice(0, 100));
-  console.log('[MarkFlow] processDrop: uriList =', uriList?.slice(0, 100));
+  log.info('processDrop: types =', dt.types);
+  log.info('processDrop: files =', files.length);
+  log.info('processDrop: pos =', pos?.pos);
+  log.info('processDrop: textPlain =', textPlain?.slice(0, 100));
+  log.info('processDrop: html =', html?.slice(0, 100));
+  log.info('processDrop: uriList =', uriList?.slice(0, 100));
 
   // ── NOW safe to do async work ──
   let meta: PendingMeta | null = null;
   try {
     meta = await fetchPendingMeta();
-    console.log('[MarkFlow] processDrop: meta =', meta);
+    log.info('processDrop: meta =', meta);
   } catch (err) {
-    console.warn('[MarkFlow] processDrop: fetchPendingMeta failed:', err);
+    log.warn('processDrop: fetchPendingMeta failed:', err);
   }
 
   // 1. Files (desktop drag)
   if (files.length > 0) {
-    console.log('[MarkFlow] processDrop: branch FILES');
+    log.info('processDrop: branch FILES');
     for (const file of files) {
       if (file.type.startsWith('image/')) {
         const base64 = await fileToBase64(file);
@@ -75,11 +76,11 @@ export async function processDrop(
   // 2. URI list (could be image or link)
   if (uriList) {
     const url = uriList.split('\n')[0].trim();
-    console.log('[MarkFlow] processDrop: branch URI-LIST, url =', url);
+    log.info('processDrop: branch URI-LIST, url =', url);
     if (isImageUrl(url, html)) {
-      console.log('[MarkFlow] processDrop: detected as image URL');
+      log.info('processDrop: detected as image URL');
       const result = await fetchImageViaBg(url);
-      console.log('[MarkFlow] processDrop: image fetch result =', result.error ?? 'ok');
+      log.info('processDrop: image fetch result =', result?.error ?? 'ok');
       if (result.base64) {
         const md = buildImageMarkdown(result.base64, result.mimeType!, meta);
         insertMarkdown(view, parseMarkdown, md, pos?.pos);
@@ -97,10 +98,10 @@ export async function processDrop(
 
   // 3. HTML content
   if (html) {
-    console.log('[MarkFlow] processDrop: branch HTML');
+    log.info('processDrop: branch HTML');
     if (isHtmlImage(html)) {
       const src = extractImageSrc(html);
-      console.log('[MarkFlow] processDrop: HTML contains img, src =', src);
+      log.info('processDrop: HTML contains img, src =', src);
       if (src) {
         const result = await fetchImageViaBg(src);
         if (result.base64) {
@@ -114,7 +115,7 @@ export async function processDrop(
       }
     }
     const text = textPlain || stripHtml(html);
-    console.log('[MarkFlow] processDrop: HTML → text =', text.slice(0, 80));
+    log.info('processDrop: HTML → text =', text.slice(0, 80));
     const md = buildTextMarkdown(text, meta);
     insertMarkdown(view, parseMarkdown, md, pos?.pos);
     return;
@@ -122,13 +123,13 @@ export async function processDrop(
 
   // 4. Plain text
   if (textPlain) {
-    console.log('[MarkFlow] processDrop: branch PLAIN TEXT =', textPlain.slice(0, 80));
+    log.info('processDrop: branch PLAIN TEXT =', textPlain.slice(0, 80));
     const md = buildTextMarkdown(textPlain, meta);
     insertMarkdown(view, parseMarkdown, md, pos?.pos);
     return;
   }
 
-  console.log('[MarkFlow] processDrop: NO MATCHING BRANCH — all data empty');
+  log.info('processDrop: NO MATCHING BRANCH — all data empty');
 }
 
 // ── Insert helper ──
@@ -140,20 +141,20 @@ function insertMarkdown(
   pos?: number,
 ) {
   try {
-    console.log('[MarkFlow] insertMarkdown: md =', md.slice(0, 120));
-    console.log('[MarkFlow] insertMarkdown: doc.size =', view.state.doc.content.size, 'pos =', pos);
+    log.info('insertMarkdown: md =', md.slice(0, 120));
+    log.info('insertMarkdown: doc.size =', view.state.doc.content.size, 'pos =', pos);
     const fragment = parse(md);
-    console.log('[MarkFlow] insertMarkdown: fragment =', fragment?.toString()?.slice(0, 100));
+    log.info('insertMarkdown: fragment =', fragment?.toString()?.slice(0, 100));
     if (!fragment) {
-      console.error('[MarkFlow] insertMarkdown: parse returned null/empty');
+      log.error('insertMarkdown: parse returned null/empty');
       return;
     }
     const insertPos = pos != null && pos >= 0 ? pos : view.state.doc.content.size;
     const tr = view.state.tr.insert(insertPos, fragment);
     view.dispatch(tr);
-    console.log('[MarkFlow] insertMarkdown: DONE, new doc.size =', view.state.doc.content.size);
+    log.info('insertMarkdown: DONE, new doc.size =', view.state.doc.content.size);
   } catch (err) {
-    console.error('[MarkFlow] insertMarkdown FAILED:', err);
+    log.error('insertMarkdown FAILED:', err);
   }
 }
 
@@ -223,7 +224,7 @@ async function fetchImageViaBg(url: string): Promise<ImageResult> {
       type: 'fetch-image',
       url,
     });
-    return resp as ImageResult;
+    return resp ?? { error: 'No response from background' };
   } catch {
     return { error: 'Failed to fetch image' };
   }
