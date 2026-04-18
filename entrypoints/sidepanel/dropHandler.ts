@@ -61,7 +61,7 @@ export async function processDrop(
   // Fallback: if no meta from content script, build from active tab URL
   if (!meta) {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (tab?.url) {
         const url = new URL(tab.url);
         meta = {
@@ -107,11 +107,11 @@ export async function processDrop(
       log.info('processDrop: detected as image URL');
       const result = await fetchImageViaBg(url);
       log.info('processDrop: image fetch result =', result?.error ?? 'ok');
-      if (result.base64) {
+      if (result.base64 && result.base64.length < 100_000) {
         const md = buildImageMarkdown(result.base64, result.mimeType!, meta);
         insertMarkdown(view, parseMarkdown, md, pos?.pos);
       } else {
-        const md = buildTextMarkdown(`![image](${url})`, meta);
+        const md = buildImageLinkMarkdown(url, meta);
         insertMarkdown(view, parseMarkdown, md, pos?.pos);
       }
     } else {
@@ -139,11 +139,11 @@ export async function processDrop(
       log.info('processDrop: HTML contains img, src =', src);
       if (src) {
         const result = await fetchImageViaBg(src);
-        if (result.base64) {
+        if (result.base64 && result.base64.length < 100_000) {
           const md = buildImageMarkdown(result.base64, result.mimeType!, meta);
           insertMarkdown(view, parseMarkdown, md, pos?.pos);
         } else {
-          const md = buildTextMarkdown(`![image](${src})`, meta);
+          const md = buildImageLinkMarkdown(src, meta);
           insertMarkdown(view, parseMarkdown, md, pos?.pos);
         }
         return;
@@ -196,7 +196,10 @@ function insertMarkdown(
 // ── Markdown builders ──
 
 function buildTextMarkdown(text: string, meta: PendingMeta | null): string {
-  const lines = [`> ${text}`];
+  const lines = text.split('\n').map((line) => {
+    const escaped = line.replace(/^(\d+)\.(\s)/, '$1\\.$2');
+    return `> ${escaped}`;
+  });
   appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
@@ -211,6 +214,13 @@ function buildLinkMarkdown(text: string, url: string, meta: PendingMeta | null):
 
 function buildImageMarkdown(base64: string, mimeType: string, meta: PendingMeta | null): string {
   const lines = [`![image](data:${mimeType};base64,${base64})`];
+  appendMeta(lines, meta);
+  lines.push('');
+  return lines.join('\n');
+}
+
+function buildImageLinkMarkdown(url: string, meta: PendingMeta | null): string {
+  const lines = [`![image](${url})`];
   appendMeta(lines, meta);
   lines.push('');
   return lines.join('\n');
@@ -249,8 +259,15 @@ function buildVideoMarkdown(url: string, meta: PendingMeta | null): string {
 function appendMeta(lines: string[], meta: PendingMeta | null): void {
   if (!meta) return;
   const parts: string[] = [];
-  if (settings.includeTime) parts.push(meta.time);
+
+  const d = new Date(meta.time);
+  const dateStr = !isNaN(d.getTime()) ? d.toLocaleDateString() : '';
+  const timeStr = !isNaN(d.getTime()) ? d.toLocaleTimeString() : meta.time;
+
+  if (settings.includeDate && dateStr) parts.push(dateStr);
+  if (settings.includeTime && timeStr) parts.push(timeStr);
   if (settings.includeSource) parts.push(`from: ${meta.siteName}`);
+
   if (parts.length > 0) {
     lines.push('', `*${parts.join(' • ')}*`);
   }
@@ -287,7 +304,7 @@ interface ImageResult {
 
 async function fetchImageViaBg(url: string): Promise<ImageResult> {
   try {
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await browser.runtime.sendMessage({
       type: 'fetch-image',
       url,
     });
@@ -301,7 +318,7 @@ async function fetchImageViaBg(url: string): Promise<ImageResult> {
 
 async function fetchPendingMeta(): Promise<PendingMeta | null> {
   try {
-    const meta = await chrome.runtime.sendMessage({ type: 'get-pending-meta' });
+    const meta = await browser.runtime.sendMessage({ type: 'get-pending-meta' });
     return (meta as PendingMeta) ?? null;
   } catch {
     return null;

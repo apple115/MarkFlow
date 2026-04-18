@@ -1,5 +1,5 @@
 export const settings = {
-  enabled: true,
+  includeDate: true,
   includeTime: true,
   includeSource: true,
 };

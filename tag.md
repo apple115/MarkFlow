@@ -1,5 +1,29 @@
 # MarkFlow 更新日志
 
+## v0.5.0 (2026-04-19)
+
+### 新增
+- 区域截图：网页上框选任意区域，自动裁剪插入编辑器
+- 截图下拉菜单：Full page / Select region 两种模式
+- 编辑器图片点击放大（lightbox）
+- 复制双格式：同时输出 HTML + Markdown，Notes 粘贴正常显示图片
+- 拖拽映射动效：脉冲扩散 + 文档类型预览（TEXT / IMAGE / LINK / FILE）
+- 截图自动压缩：宽度限制 1200px、JPEG 压缩、Base64 < 100KB
+- 图片 Base64 > 100KB 自动降级为 Markdown 链接
+- 列表序号转义（`1. ` → `1\. `），避免被解析为有序列表
+- content script 区域选择遮罩（支持 Escape 取消）
+
+### 优化
+- Copy 按钮改为双格式输出（text/html + text/plain）
+- HTML 输出图片限制 width=600，粘贴到 Notes 不再巨大
+- 拖拽图片 fetch 失败时降级为链接格式
+- 压缩阈值从 500KB 降到 100KB
+
+### 修复
+- 截图 Tab 定位：sidepanel 中 `tabs.query` 不再返回自身
+- content script 异步消息响应（sendResponse + return true）
+- 区域截图 DPR 缩放坐标偏移
+
 ## v0.4.0 (2026-04-16)
 
 ### 新增

@@ -1,20 +1,75 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useMilkdown } from './useMilkdown';
 import { downloadLogs, log } from './logger';
 import { settings } from './settings';
 
+function detectDragType(dt: DataTransfer): 'text' | 'image' | 'link' | 'file' {
+  const types = Array.from(dt.types).map((t) => t.toLowerCase());
+  if (types.includes('files')) return 'image';
+  if (types.includes('text/uri-list')) return 'link';
+  if (types.includes('text/html') || types.includes('text/plain')) return 'text';
+  return 'text';
+}
+
+function DragTypeIcon({ type }: { type: 'text' | 'image' | 'link' | 'file' }) {
+  const paths: Record<string, ReactNode> = {
+    text: (
+      <>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </>
+    ),
+    image: (
+      <>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+        <circle cx="8.5" cy="8.5" r="1.5" />
+        <polyline points="21 15 16 10 5 21" />
+      </>
+    ),
+    link: (
+      <>
+        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+      </>
+    ),
+    file: (
+      <>
+        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+        <polyline points="13 2 13 9 20 9" />
+      </>
+    ),
+  };
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-blue-500 dark:text-blue-300" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {paths[type]}
+    </svg>
+  );
+}
+
 export default function App() {
   const { rootRef, handle, loading } = useMilkdown();
-  const [isDragging, setIsDragging] = useState(false);
+  const [dragState, setDragState] = useState<{ active: boolean; type: 'text' | 'image' | 'link' | 'file' } | null>(null);
   const [status, setStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
   const [charCount, setCharCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [ssMenuOpen, setSsMenuOpen] = useState(false);
   const [modal, setModal] = useState<'drag' | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [includeDate, setIncludeDate] = useState(settings.includeDate);
   const [includeTime, setIncludeTime] = useState(settings.includeTime);
   const [includeSource, setIncludeSource] = useState(settings.includeSource);
   const menuRef = useRef<HTMLDivElement>(null);
+  const ssMenuRef = useRef<HTMLDivElement>(null);
 
   const hasContent = !loading && handle != null && !handle.isEmpty();
+
+  const toggleDate = useCallback((v: boolean) => {
+    setIncludeDate(v);
+  }, []);
 
   const toggleTime = useCallback((v: boolean) => {
     setIncludeTime(v);
@@ -25,11 +80,12 @@ export default function App() {
   }, []);
 
   const saveSettings = useCallback(() => {
+    settings.includeDate = includeDate;
     settings.includeTime = includeTime;
     settings.includeSource = includeSource;
-    log.info('Settings saved:', { includeTime, includeSource });
+    log.info('Settings saved:', { includeDate, includeTime, includeSource });
     setModal(null);
-  }, [includeTime, includeSource]);
+  }, [includeDate, includeTime, includeSource]);
 
   useEffect(() => {
     if (!handle) return;
@@ -39,27 +95,48 @@ export default function App() {
     return () => clearInterval(id);
   }, [handle]);
 
-  // Close menu on outside click
+  // Close menus on outside click
   useEffect(() => {
-    if (!menuOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
+      }
+      if (ssMenuOpen && ssMenuRef.current && !ssMenuRef.current.contains(e.target as Node)) {
+        setSsMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [menuOpen]);
+  }, [menuOpen, ssMenuOpen]);
+
+  // Image click → lightbox
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'IMG' && target.closest('.ProseMirror')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setLightbox((target as HTMLImageElement).src);
+      }
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, []);
 
   const handleCopy = useCallback(async () => {
     if (!handle) return;
     setStatus('copying');
     try {
       const md = handle.getMarkdown();
-      await navigator.clipboard.writeText(md);
+      const html = handle.getHtml();
+      const blobHtml = new Blob([html], { type: 'text/html' });
+      const blobText = new Blob([md], { type: 'text/plain' });
+      const item = new ClipboardItem({ 'text/html': blobHtml, 'text/plain': blobText });
+      await navigator.clipboard.write([item]);
       setStatus('copied');
       setTimeout(() => setStatus('idle'), 2000);
     } catch {
+      // Fallback: plain text only
       const md = handle.getMarkdown();
       const ta = document.createElement('textarea');
       ta.value = md;
@@ -80,8 +157,123 @@ export default function App() {
     setCharCount(0);
   }, [handle]);
 
-  const onDragStateChange = useCallback((dragging: boolean) => {
-    setIsDragging(dragging);
+  async function getWebpageTab(): Promise<any | null> {
+    const tabs = await browser.tabs.query({ active: true });
+    for (const t of tabs) {
+      if (t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://')) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  async function compressScreenshot(dataUrl: string, maxSize = 100_000, maxWidth = 1200): Promise<string> {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = dataUrl; });
+
+    // Hard cap on pixel dimensions so pasted images don't blow up in Notes
+    let scale = img.naturalWidth > maxWidth ? maxWidth / img.naturalWidth : 1;
+    let quality = 0.92;
+    let result = '';
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      result = canvas.toDataURL('image/jpeg', quality);
+      const size = result.split(',')[1].length;
+      log.info('Screenshot compress', { attempt, scale: +scale.toFixed(3), quality: +quality.toFixed(2), width: canvas.width, size });
+      if (size <= maxSize) return result;
+      if (attempt < 3) quality *= 0.65;
+      else scale *= 0.65;
+    }
+    return result;
+  }
+
+  const doFullScreenshot = useCallback(async () => {
+    if (!handle) return;
+    try {
+      const tab = await getWebpageTab();
+      if (!tab?.id) { log.warn('No webpage tab found'); return; }
+      log.info('Full screenshot: capturing tab', tab.id, tab.url);
+
+      const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      const compressed = await compressScreenshot(dataUrl);
+      const base64 = compressed.split(',')[1];
+      const mime = compressed.includes('image/jpeg') ? 'image/jpeg' : 'image/png';
+
+      const url = tab.url ? new URL(tab.url) : null;
+      const metaParts: string[] = [];
+      const now = new Date();
+      if (settings.includeDate) metaParts.push(now.toLocaleDateString());
+      if (settings.includeTime) metaParts.push(now.toLocaleTimeString());
+      if (settings.includeSource && url) metaParts.push(`from: ${url.hostname}`);
+
+      let md = `![image](data:${mime};base64,${base64})`;
+      if (metaParts.length > 0) md += `\n\n*${metaParts.join(' • ')}*`;
+      md += '\n';
+
+      handle.insertMarkdown(md);
+      log.info('Full screenshot inserted, base64 size =', base64.length);
+    } catch (err) {
+      log.error('Screenshot failed:', err);
+    }
+  }, [handle]);
+
+  const doRegionScreenshot = useCallback(async () => {
+    if (!handle) return;
+    try {
+      const tab = await getWebpageTab();
+      if (!tab?.id) { log.warn('No webpage tab found'); return; }
+      log.info('Region screenshot: sending message to tab', tab.id);
+
+      const rect = await browser.tabs.sendMessage(tab.id, { type: 'start-screenshot-mode' });
+      if (!rect) { log.info('Region selection cancelled'); return; }
+      log.info('Region rect =', rect);
+
+      const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = dataUrl; });
+
+      const dpr = rect.dpr || 1;
+      const sx = rect.x * dpr;
+      const sy = rect.y * dpr;
+      const sw = rect.width * dpr;
+      const sh = rect.height * dpr;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, rect.width, rect.height);
+
+      const raw = canvas.toDataURL('image/png');
+      const compressed = await compressScreenshot(raw);
+      const base64 = compressed.split(',')[1];
+      const mime = compressed.includes('image/jpeg') ? 'image/jpeg' : 'image/png';
+
+      const url = tab.url ? new URL(tab.url) : null;
+      const metaParts: string[] = [];
+      const now = new Date();
+      if (settings.includeDate) metaParts.push(now.toLocaleDateString());
+      if (settings.includeTime) metaParts.push(now.toLocaleTimeString());
+      if (settings.includeSource && url) metaParts.push(`from: ${url.hostname}`);
+
+      let md = `![image](data:${mime};base64,${base64})`;
+      if (metaParts.length > 0) md += `\n\n*${metaParts.join(' • ')}*`;
+      md += '\n';
+
+      handle.insertMarkdown(md);
+      log.info('Region screenshot inserted, base64 size =', base64.length);
+    } catch (err) {
+      log.error('Region screenshot failed:', err);
+    }
+  }, [handle]);
+
+  const onDragStateChange = useCallback((state: { active: boolean; type?: 'text' | 'image' | 'link' | 'file' }) => {
+    setDragState(state.active ? { active: true, type: state.type || 'text' } : null);
   }, []);
 
   return (
@@ -110,6 +302,56 @@ export default function App() {
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
           </button>
+          {/* Screenshot dropdown */}
+          <div ref={ssMenuRef} className="relative">
+            <button
+              onClick={() => setSsMenuOpen((v) => !v)}
+              className="p-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 active:opacity-60 transition-all duration-150"
+              title="Screenshot"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+            </button>
+            <div
+              className="absolute top-full right-0 mt-1 w-36 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-30"
+              style={{
+                opacity: ssMenuOpen ? 1 : 0,
+                transform: ssMenuOpen ? 'translateY(0) scaleY(1)' : 'translateY(-4px) scaleY(0.9)',
+                transformOrigin: 'top right',
+                pointerEvents: ssMenuOpen ? 'auto' : 'none',
+                transition: 'opacity 150ms, transform 200ms cubic-bezier(0.16, 1, 0.3, 1)',
+              }}
+            >
+              <button
+                onClick={() => { setSsMenuOpen(false); doFullScreenshot(); }}
+                className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+                Full page
+              </button>
+              <button
+                onClick={() => { setSsMenuOpen(false); doRegionScreenshot(); }}
+                className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3h7v7H3z" />
+                  <path d="M14 3h7v7h-7z" />
+                  <path d="M14 14h7v7h-7z" />
+                  <path d="M3 14h7v7H3z" />
+                </svg>
+                Select region
+              </button>
+            </div>
+          </div>
           {/* Clear */}
           <button
             onClick={handleClear}
@@ -187,16 +429,22 @@ export default function App() {
 
       {/* Editor area */}
       <div className="relative flex-1 overflow-hidden">
-        {isDragging && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-50/60 dark:bg-blue-900/30 pointer-events-none">
-            <div className="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-300">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-              <span className="text-sm font-medium">Drop to add</span>
+        {dragState?.active && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-50/50 dark:bg-blue-900/20 pointer-events-none">
+            {/* Pulse rings */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-32 h-32 rounded-2xl border-2 border-blue-400/30 dark:border-blue-400/20" style={{ animation: 'dropPulse 1.5s ease-out infinite' }} />
+              <div className="absolute w-32 h-32 rounded-2xl border-2 border-blue-400/30 dark:border-blue-400/20" style={{ animation: 'dropPulse 1.5s ease-out 0.5s infinite' }} />
+            </div>
+            {/* Document ghost */}
+            <div className="relative flex flex-col items-center gap-3" style={{ animation: 'dropFloat 2s ease-in-out infinite' }}>
+              <div className="w-28 h-36 rounded-lg border-2 border-dashed border-blue-400/60 dark:border-blue-400/40 bg-blue-100/40 dark:bg-blue-800/20 flex flex-col items-center justify-center gap-2">
+                <DragTypeIcon type={dragState.type} />
+                <span className="text-[10px] font-medium text-blue-500 dark:text-blue-300 uppercase tracking-wider">
+                  {dragState.type}
+                </span>
+              </div>
+              <span className="text-xs text-blue-500/80 dark:text-blue-300/60">Release to capture</span>
             </div>
           </div>
         )}
@@ -222,6 +470,15 @@ export default function App() {
             style={{ animation: 'modalIn 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
           >
             <h3 className="text-sm font-medium mb-3 text-gray-700 dark:text-gray-200">拖拽设置</h3>
+            <label className="flex items-center justify-between py-2 cursor-pointer">
+              <span className="text-xs text-gray-600 dark:text-gray-300">包含日期</span>
+              <input
+                type="checkbox"
+                checked={includeDate}
+                onChange={(e) => toggleDate(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+            </label>
             <label className="flex items-center justify-between py-2 cursor-pointer">
               <span className="text-xs text-gray-600 dark:text-gray-300">包含时间</span>
               <input
@@ -249,6 +506,23 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-zoom-out"
+          onClick={() => setLightbox(null)}
+          style={{ animation: 'backdropIn 200ms ease forwards' }}
+        >
+          <img
+            src={lightbox}
+            alt=""
+            className="max-w-[90%] max-h-[90%] rounded-lg shadow-2xl"
+            style={{ animation: 'modalIn 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -260,19 +534,21 @@ function EditorMount({
 }: {
   rootRef: (el: HTMLDivElement | null) => void;
   loading: boolean;
-  onDragStateChange: (dragging: boolean) => void;
+  onDragStateChange: (state: { active: boolean; type?: 'text' | 'image' | 'link' | 'file' }) => void;
 }) {
   const setRef = useCallback(
     (el: HTMLDivElement | null) => {
       rootRef(el);
       if (el) {
         const onDragEnter = (e: DragEvent) => {
-          if (e.dataTransfer?.types.length) onDragStateChange(true);
+          if (e.dataTransfer?.types.length) {
+            onDragStateChange({ active: true, type: detectDragType(e.dataTransfer) });
+          }
         };
         const onDragLeave = (e: DragEvent) => {
-          if (!el.contains(e.relatedTarget as Node)) onDragStateChange(false);
+          if (!el.contains(e.relatedTarget as Node)) onDragStateChange({ active: false });
         };
-        const onDrop = () => onDragStateChange(false);
+        const onDrop = () => onDragStateChange({ active: false });
 
         el.addEventListener('dragenter', onDragEnter);
         el.addEventListener('dragleave', onDragLeave);

@@ -7,15 +7,18 @@ import {
   editorViewCtx,
   serializerCtx,
   parserCtx,
+  schemaCtx,
 } from '@milkdown/kit/core';
 import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { history } from '@milkdown/kit/plugin/history';
 import { clipboard } from '@milkdown/kit/plugin/clipboard';
+import { DOMSerializer } from '@milkdown/kit/prose/model';
 import { processDrop } from './dropHandler';
 import { log } from './logger';
 
 export interface MilkdownHandle {
   getMarkdown: () => string;
+  getHtml: () => string;
   insertMarkdown: (md: string, pos?: number) => void;
   clear: () => void;
   isEmpty: () => boolean;
@@ -142,6 +145,29 @@ function buildHandle(editor: Editor): MilkdownHandle {
           md = serializer(view.state.doc);
         });
         return md;
+      } catch {
+        return '';
+      }
+    },
+
+    getHtml(): string {
+      try {
+        let html = '';
+        editor.action((ctx) => {
+          const schema = ctx.get(schemaCtx);
+          const view = ctx.get(editorViewCtx);
+          const serializer = DOMSerializer.fromSchema(schema);
+          const fragment = serializer.serializeFragment(view.state.doc.content);
+          const wrap = document.createElement('div');
+          wrap.appendChild(fragment);
+          // Limit image size for rich-text pasting (Notes ignores CSS, use attributes)
+          wrap.querySelectorAll('img').forEach((img) => {
+            img.setAttribute('width', '600');
+            img.removeAttribute('height');
+          });
+          html = wrap.innerHTML;
+        });
+        return html;
       } catch {
         return '';
       }
