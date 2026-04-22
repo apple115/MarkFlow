@@ -57,13 +57,14 @@ export default function App() {
   const [charCount, setCharCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [ssMenuOpen, setSsMenuOpen] = useState(false);
-  const [modal, setModal] = useState<'drag' | null>(null);
+  const [modal, setModal] = useState<'drag' | 'clear' | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [includeDate, setIncludeDate] = useState(settings.includeDate);
   const [includeTime, setIncludeTime] = useState(settings.includeTime);
   const [includeSource, setIncludeSource] = useState(settings.includeSource);
   const menuRef = useRef<HTMLDivElement>(null);
   const ssMenuRef = useRef<HTMLDivElement>(null);
+  const clearRef = useRef<HTMLDivElement>(null);
 
   const hasContent = !loading && handle != null && !handle.isEmpty();
 
@@ -95,7 +96,7 @@ export default function App() {
     return () => clearInterval(id);
   }, [handle]);
 
-  // Close menus on outside click
+  // Close menus/popovers on outside click
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -104,10 +105,13 @@ export default function App() {
       if (ssMenuOpen && ssMenuRef.current && !ssMenuRef.current.contains(e.target as Node)) {
         setSsMenuOpen(false);
       }
+      if (modal === 'clear' && clearRef.current && !clearRef.current.contains(e.target as Node)) {
+        setModal(null);
+      }
     };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [menuOpen, ssMenuOpen]);
+  }, [menuOpen, ssMenuOpen, modal]);
 
   // Image click → lightbox
   useEffect(() => {
@@ -151,10 +155,11 @@ export default function App() {
     }
   }, [handle]);
 
-  const handleClear = useCallback(() => {
+  const confirmClear = useCallback(() => {
     if (!handle) return;
     handle.clear();
     setCharCount(0);
+    setModal(null);
   }, [handle]);
 
   async function getWebpageTab(): Promise<any | null> {
@@ -353,20 +358,33 @@ export default function App() {
             </div>
           </div>
           {/* Clear */}
-          <button
-            onClick={handleClear}
-            disabled={!hasContent}
-            className="p-1.5 text-gray-400 hover:text-red-500 disabled:opacity-30
-                       disabled:cursor-not-allowed active:scale-90 active:opacity-60
-                       transition-all duration-150"
-            title="Clear"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-            </svg>
-          </button>
+          <div ref={clearRef} className="relative">
+            <button
+              onClick={() => setModal(modal === 'clear' ? null : 'clear')}
+              disabled={!hasContent && modal !== 'clear'}
+              className={`p-1.5 rounded active:scale-90 active:opacity-60 transition-all duration-150 ${
+                modal === 'clear' ? 'text-red-500' : 'text-gray-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed'
+              }`}
+              title="Clear"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+            <DropdownMenu open={modal === 'clear'} className="w-36">
+              <div className="px-3 py-2.5">
+                <p className="text-xs text-gray-600 dark:text-gray-300 mb-2">确定清空所有内容？</p>
+                <button
+                  onClick={confirmClear}
+                  className="w-full px-2 py-1.5 text-[11px] font-medium text-white bg-red-500 rounded hover:bg-red-600 transition-colors"
+                >
+                  清空
+                </button>
+              </div>
+            </DropdownMenu>
+          </div>
           {/* Settings gear */}
           <div ref={menuRef} className="relative">
             <button
@@ -389,16 +407,7 @@ export default function App() {
             </button>
 
             {/* Dropdown menu */}
-            <div
-              className="absolute top-full right-0 mt-1 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-30"
-              style={{
-                opacity: menuOpen ? 1 : 0,
-                transform: menuOpen ? 'translateY(0) scaleY(1)' : 'translateY(-4px) scaleY(0.9)',
-                transformOrigin: 'top right',
-                pointerEvents: menuOpen ? 'auto' : 'none',
-                transition: 'opacity 150ms, transform 200ms cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-            >
+            <DropdownMenu open={menuOpen} className="w-44">
               <button
                 onClick={() => { setMenuOpen(false); setModal('drag'); }}
                 className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
@@ -422,13 +431,16 @@ export default function App() {
                 </svg>
                 下载日志
               </button>
-            </div>
+            </DropdownMenu>
           </div>
         </div>
       </header>
 
       {/* Editor area */}
       <div className="relative flex-1 overflow-hidden">
+        {modal === 'clear' && (
+          <div className="absolute inset-0 z-10 bg-gray-500/20 dark:bg-gray-900/30 backdrop-blur-[2px] pointer-events-none" />
+        )}
         {dragState?.active && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-50/50 dark:bg-blue-900/20 pointer-events-none">
             {/* Pulse rings */}
@@ -458,7 +470,7 @@ export default function App() {
       </footer>
 
       {/* Modal overlay */}
-      {modal && (
+      {modal === 'drag' && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
           onClick={() => setModal(null)}
@@ -508,21 +520,109 @@ export default function App() {
       )}
 
       {/* Lightbox */}
-      {lightbox && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-zoom-out"
-          onClick={() => setLightbox(null)}
-          style={{ animation: 'backdropIn 200ms ease forwards' }}
-        >
-          <img
-            src={lightbox}
-            alt=""
-            className="max-w-[90%] max-h-[90%] rounded-lg shadow-2xl"
-            style={{ animation: 'modalIn 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
+      {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    if (!containerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = Math.min(Math.max(scale * delta, 0.1), 10);
+
+    // Zoom around mouse pointer
+    const scaleRatio = newScale / scale;
+    const newTx = mouseX - (mouseX - translate.x) * scaleRatio;
+    const newTy = mouseY - (mouseY - translate.y) * scaleRatio;
+
+    setScale(newScale);
+    setTranslate({ x: newTx, y: newTy });
+  }, [scale, translate]);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    setDragging(true);
+    dragStart.current = { x: e.clientX, y: e.clientY, tx: translate.x, ty: translate.y };
+  }, [translate]);
+
+  const onMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!dragging) return;
+    setTranslate({
+      x: dragStart.current.tx + (e.clientX - dragStart.current.x),
+      y: dragStart.current.ty + (e.clientY - dragStart.current.y),
+    });
+  }, [dragging]);
+
+  const onMouseUp = useCallback(() => setDragging(false), []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+      onWheel={onWheel}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
+      style={{
+        animation: 'backdropIn 200ms ease forwards',
+        cursor: dragging ? 'grabbing' : scale > 1 ? 'grab' : 'zoom-out',
+      }}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        className="rounded-lg shadow-2xl select-none"
+        style={{
+          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+          transition: dragging ? 'none' : 'transform 100ms ease-out',
+          maxWidth: 'none',
+          maxHeight: 'none',
+          animation: 'modalIn 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs pointer-events-none select-none">
+        Scroll to zoom · Drag to pan · Click outside to close
+      </div>
+    </div>
+  );
+}
+
+function DropdownMenu({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
+  return (
+    <div
+      className={`absolute top-full right-0 mt-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-30 ${className ?? ''}`}
+      style={{
+        opacity: open ? 1 : 0,
+        transform: open ? 'translateY(0) scaleY(1)' : 'translateY(-4px) scaleY(0.9)',
+        transformOrigin: 'top right',
+        pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 150ms, transform 200ms cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+    >
+      {children}
     </div>
   );
 }
