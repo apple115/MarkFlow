@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useMilkdown } from './useMilkdown';
 import { downloadLogs, log } from './logger';
 import { settings } from './settings';
+import { ensureRoomKey, isValidRoomKey, saveSyncConfig, syncUpload, syncRestore, type SyncConfig } from './sync';
+import { SyncConnection } from './syncConnection';
 
 function detectDragType(dt: DataTransfer): 'text' | 'image' | 'link' | 'file' {
   const types = Array.from(dt.types).map((t) => t.toLowerCase());
@@ -51,13 +53,13 @@ function DragTypeIcon({ type }: { type: 'text' | 'image' | 'link' | 'file' }) {
 }
 
 export default function App() {
-  const { rootRef, handle, loading } = useMilkdown();
+  const { rootRef, handle, loading, ydoc } = useMilkdown();
   const [dragState, setDragState] = useState<{ active: boolean; type: 'text' | 'image' | 'link' | 'file' } | null>(null);
   const [status, setStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
   const [charCount, setCharCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [ssMenuOpen, setSsMenuOpen] = useState(false);
-  const [modal, setModal] = useState<'drag' | 'clear' | null>(null);
+  const [modal, setModal] = useState<'drag' | 'clear' | 'sync' | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [includeDate, setIncludeDate] = useState(settings.includeDate);
   const [includeTime, setIncludeTime] = useState(settings.includeTime);
@@ -65,6 +67,58 @@ export default function App() {
   const menuRef = useRef<HTMLDivElement>(null);
   const ssMenuRef = useRef<HTMLDivElement>(null);
   const clearRef = useRef<HTMLDivElement>(null);
+
+  const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(null);
+  const [syncCopied, setSyncCopied] = useState(false);
+  const [bindInput, setBindInput] = useState('');
+  const [serverInput, setServerInput] = useState('');
+  const [syncStatus, setSyncStatus] = useState<'offline' | 'online' | 'syncing'>('offline');
+
+  // Load sync config on mount
+  useEffect(() => {
+    ensureRoomKey().then(setSyncConfig);
+  }, []);
+
+  // Restore from KV snapshot on first load, then upload periodically
+  useEffect(() => {
+    if (!syncConfig || loading) return;
+    // Restore snapshot on startup
+    syncRestore(ydoc, syncConfig).then((restored) => {
+      if (restored) log.info('Sync: restored snapshot from KV');
+    });
+    // Upload snapshot every 30s
+    const id = setInterval(() => {
+      syncUpload(ydoc, syncConfig).catch((err) => log.warn('Sync upload failed:', err));
+    }, 30_000);
+    // Force upload on hide/close to avoid losing recent edits
+    const onHide = () => {
+      if (document.hidden) {
+        syncUpload(ydoc, syncConfig).catch((err) => log.warn('Sync flush failed:', err));
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, [syncConfig, loading, ydoc]);
+
+  // P2P sync: create SyncConnection and broadcast Yjs updates
+  useEffect(() => {
+    if (!syncConfig || loading) return;
+    const conn = new SyncConnection(ydoc, syncConfig, setSyncStatus);
+    conn.connect();
+
+    const onUpdate = (update: Uint8Array) => {
+      conn.broadcastUpdate(update);
+    };
+    ydoc.on('update', onUpdate);
+
+    return () => {
+      ydoc.off('update', onUpdate);
+      conn.destroy();
+    };
+  }, [syncConfig, loading, ydoc]);
 
   const hasContent = !loading && handle != null && !handle.isEmpty();
 
@@ -420,6 +474,16 @@ export default function App() {
                 拖拽设置
               </button>
               <button
+                onClick={() => { setMenuOpen(false); setModal('sync'); }}
+                className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                同步设置
+              </button>
+              <button
                 onClick={() => { setMenuOpen(false); downloadLogs(); }}
                 className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
               >
@@ -514,6 +578,112 @@ export default function App() {
               className="w-full mt-3 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
             >
               保存
+            </button>
+          </div>
+        </div>
+      )}
+
+      {modal === 'sync' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
+          onClick={() => setModal(null)}
+          style={{ animation: 'backdropIn 300ms ease forwards' }}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200/60 dark:border-gray-700/60 w-72 p-4"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: 'modalIn 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
+          >
+            <h3 className="text-sm font-medium mb-3 text-gray-700 dark:text-gray-200">同步设置</h3>
+
+            {/* Room Key */}
+            <div className="mb-3">
+              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">Room Key</label>
+              <div className="flex items-center gap-1.5">
+                <code className="flex-1 px-2 py-1.5 text-[11px] font-mono bg-gray-100 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 truncate select-all">
+                  {syncConfig?.roomKey ?? '...'}
+                </code>
+                <button
+                  onClick={async () => {
+                    if (!syncConfig) return;
+                    await navigator.clipboard.writeText(syncConfig.roomKey);
+                    setSyncCopied(true);
+                    setTimeout(() => setSyncCopied(false), 2000);
+                  }}
+                  className="p-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all"
+                  title="Copy"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  {syncCopied && <span className="sr-only">Copied!</span>}
+                </button>
+              </div>
+              {syncCopied && <p className="text-[10px] text-green-500 mt-0.5">已复制</p>}
+            </div>
+
+            {/* Bind device */}
+            <div className="mb-3">
+              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">绑定设备</label>
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  value={bindInput}
+                  onChange={(e) => setBindInput(e.target.value)}
+                  placeholder="输入其他设备的 Room Key"
+                  className="flex-1 px-2 py-1.5 text-[11px] bg-gray-100 dark:bg-gray-700 rounded border-none outline-none focus:ring-1 focus:ring-indigo-500 text-gray-700 dark:text-gray-300 placeholder:text-gray-400"
+                />
+                <button
+                  onClick={async () => {
+                    if (!isValidRoomKey(bindInput) || !syncConfig) return;
+                    const newConfig = { ...syncConfig, roomKey: bindInput };
+                    await saveSyncConfig(newConfig);
+                    setSyncConfig(newConfig);
+                    setBindInput('');
+                    log.info('Bound to room:', bindInput);
+                  }}
+                  disabled={!isValidRoomKey(bindInput)}
+                  className="px-2.5 py-1.5 text-[11px] font-medium text-white bg-indigo-600 rounded hover:bg-indigo-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  绑定
+                </button>
+              </div>
+            </div>
+
+            {/* Server URL */}
+            <div className="mb-3">
+              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">后端地址</label>
+              <input
+                type="text"
+                value={serverInput || syncConfig?.serverUrl || ''}
+                onChange={(e) => setServerInput(e.target.value)}
+                onBlur={async () => {
+                  if (!syncConfig || !serverInput) return;
+                  const newConfig = { ...syncConfig, serverUrl: serverInput };
+                  await saveSyncConfig(newConfig);
+                  setSyncConfig(newConfig);
+                  log.info('Server URL updated:', serverInput);
+                }}
+                placeholder={syncConfig?.serverUrl}
+                className="w-full px-2 py-1.5 text-[11px] bg-gray-100 dark:bg-gray-700 rounded border-none outline-none focus:ring-1 focus:ring-indigo-500 text-gray-700 dark:text-gray-300 placeholder:text-gray-400"
+              />
+            </div>
+
+            {/* Sync status */}
+            <div className="flex items-center gap-1.5 mb-3">
+              <span className={`w-1.5 h-1.5 rounded-full ${syncStatus === 'online' ? 'bg-green-500' : syncStatus === 'syncing' ? 'bg-yellow-500 animate-pulse' : 'bg-gray-400'}`} />
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                {syncStatus === 'online' ? '已连接' : syncStatus === 'syncing' ? '同步中' : '离线'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => setModal(null)}
+              className="w-full px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              关闭
             </button>
           </div>
         </div>

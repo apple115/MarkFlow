@@ -12,7 +12,10 @@ import {
 import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { history } from '@milkdown/kit/plugin/history';
 import { clipboard } from '@milkdown/kit/plugin/clipboard';
+import { $prose } from '@milkdown/utils';
 import { DOMSerializer } from '@milkdown/kit/prose/model';
+import * as Y from 'yjs';
+import { ySyncPlugin } from 'y-prosemirror';
 import { processDrop } from './dropHandler';
 import { log } from './logger';
 
@@ -32,10 +35,12 @@ export function useMilkdown(): {
   rootRef: (el: HTMLDivElement | null) => void;
   handle: MilkdownHandle | null;
   loading: boolean;
+  ydoc: Y.Doc;
 } {
   const editorRef = useRef<Editor | null>(null);
   const handleRef = useRef<MilkdownHandle | null>(null);
   const ctxRef = useRef<any>(null);
+  const ydocRef = useRef<Y.Doc>(new Y.Doc());
   const [loading, setLoading] = useState(true);
   const [handle, setHandle] = useState<MilkdownHandle | null>(null);
 
@@ -44,6 +49,10 @@ export function useMilkdown(): {
     if (editorRef.current) return;
 
     let destroyed = false;
+
+    // Create Yjs sync plugin for Milkdown
+    const yXmlFragment = ydocRef.current.getXmlFragment('prosemirror');
+    const syncPlugin = $prose(() => ySyncPlugin(yXmlFragment));
 
     const editor = Editor.make()
       .config((ctx) => {
@@ -60,6 +69,7 @@ export function useMilkdown(): {
       .use(commonmark)
       .use(history)
       .use(clipboard)
+      .use(syncPlugin)
       .create();
 
     editor.then((ed) => {
@@ -131,7 +141,7 @@ export function useMilkdown(): {
     };
   }, []);
 
-  return { rootRef, handle, loading };
+  return { rootRef, handle, loading, ydoc: ydocRef.current };
 }
 
 function buildHandle(editor: Editor): MilkdownHandle {
