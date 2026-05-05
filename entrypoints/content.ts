@@ -37,7 +37,27 @@ export default defineContentScript({
             console.error('[MarkFlow CS] Screenshot mode error:', err);
             sendResponse(null);
           });
-        return true; // keep channel open for async response
+        return true;
+      }
+      if (message.type === 'prepare-scroll-capture') {
+        sendResponse({
+          scrollHeight: document.documentElement.scrollHeight,
+          scrollTop: window.scrollY,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          dpr: window.devicePixelRatio || 1,
+        });
+        return false;
+      }
+      if (message.type === 'scroll-to') {
+        window.scrollTo({ top: message.y, behavior: 'instant' });
+        setTimeout(() => sendResponse({ done: true }), 200);
+        return true;
+      }
+      if (message.type === 'finish-scroll-capture') {
+        window.scrollTo({ top: message.originalScrollTop ?? 0, behavior: 'instant' });
+        sendResponse({ done: true });
+        return false;
       }
     });
   },

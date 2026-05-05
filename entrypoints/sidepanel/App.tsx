@@ -59,6 +59,7 @@ export default function App() {
   const [charCount, setCharCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [ssMenuOpen, setSsMenuOpen] = useState(false);
+  const [scrollProgress, setScrollProgress] = useState<{ current: number; total: number } | null>(null);
   const [modal, setModal] = useState<'drag' | 'clear' | 'sync' | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [includeDate, setIncludeDate] = useState(settings.includeDate);
@@ -331,6 +332,86 @@ export default function App() {
     }
   }, [handle]);
 
+  const doScrollScreenshot = useCallback(async () => {
+    if (!handle) return;
+    try {
+      const tab = await getWebpageTab();
+      if (!tab?.id) { log.warn('No webpage tab found'); return; }
+
+      const info = await browser.tabs.sendMessage(tab.id, { type: 'prepare-scroll-capture' });
+      if (!info) { log.warn('Scroll capture: no response from content script'); return; }
+      log.info('Scroll capture: page info', info);
+
+      const { scrollHeight, scrollTop, viewportHeight, dpr } = info;
+      const maxCaptures = 20;
+      const totalCaptures = Math.min(Math.ceil(scrollHeight / viewportHeight), maxCaptures);
+
+      if (totalCaptures <= 1) {
+        // Page fits in viewport, just do a regular full screenshot
+        setScrollProgress(null);
+        await browser.tabs.sendMessage(tab.id, { type: 'finish-scroll-capture', originalScrollTop: scrollTop });
+        doFullScreenshot();
+        return;
+      }
+
+      const chunks: string[] = [];
+
+      for (let i = 0; i < totalCaptures; i++) {
+        setScrollProgress({ current: i + 1, total: totalCaptures });
+        const scrollY = i * viewportHeight;
+        await browser.tabs.sendMessage(tab.id, { type: 'scroll-to', y: scrollY });
+        const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+        chunks.push(dataUrl);
+      }
+
+      // Restore scroll position
+      await browser.tabs.sendMessage(tab.id, { type: 'finish-scroll-capture', originalScrollTop: scrollTop });
+
+      // Stitch chunks into one image
+      const firstImg = new Image();
+      await new Promise<void>((resolve, reject) => { firstImg.onload = () => resolve(); firstImg.onerror = reject; firstImg.src = chunks[0]; });
+
+      const canvasW = firstImg.naturalWidth;
+      const canvasH = Math.round(scrollHeight * dpr);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+      const ctx = canvas.getContext('2d')!;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const img = new Image();
+        await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = chunks[i]; });
+        const dstY = i * viewportHeight * dpr;
+        const remaining = canvasH - dstY;
+        const srcH = Math.min(img.naturalHeight, remaining);
+        ctx.drawImage(img, 0, 0, img.naturalWidth, srcH, 0, dstY, img.naturalWidth, srcH);
+      }
+
+      const raw = canvas.toDataURL('image/png');
+      const compressed = await compressScreenshot(raw, 150_000, 1200);
+      const base64 = compressed.split(',')[1];
+      const mime = compressed.includes('image/jpeg') ? 'image/jpeg' : 'image/png';
+
+      const url = tab.url ? new URL(tab.url) : null;
+      const metaParts: string[] = [];
+      const now = new Date();
+      if (settings.includeDate) metaParts.push(now.toLocaleDateString());
+      if (settings.includeTime) metaParts.push(now.toLocaleTimeString());
+      if (settings.includeSource && url) metaParts.push(`from: ${url.hostname}`);
+
+      let md = `![image](data:${mime};base64,${base64})`;
+      if (metaParts.length > 0) md += `\n\n*${metaParts.join(' • ')}*`;
+      md += '\n';
+
+      handle.insertMarkdown(md);
+      log.info('Scroll screenshot inserted', { captures: totalCaptures, base64Size: base64.length });
+    } catch (err) {
+      log.error('Scroll screenshot failed:', err);
+    } finally {
+      setScrollProgress(null);
+    }
+  }, [handle, doFullScreenshot]);
+
   const onDragStateChange = useCallback((state: { active: boolean; type?: 'text' | 'image' | 'link' | 'file' }) => {
     setDragState(state.active ? { active: true, type: state.type || 'text' } : null);
   }, []);
@@ -395,6 +476,19 @@ export default function App() {
                   <line x1="12" y1="17" x2="12" y2="21" />
                 </svg>
                 Full page
+              </button>
+              <button
+                onClick={() => { setSsMenuOpen(false); doScrollScreenshot(); }}
+                className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="20" rx="2" />
+                  <line x1="12" y1="2" x2="12" y2="22" />
+                  <polyline points="8 6 12 2 16 6" />
+                  <polyline points="8 18 12 22 16 18" />
+                </svg>
+                Scroll capture
               </button>
               <button
                 onClick={() => { setSsMenuOpen(false); doRegionScreenshot(); }}
@@ -504,6 +598,16 @@ export default function App() {
       <div className="relative flex-1 overflow-hidden">
         {modal === 'clear' && (
           <div className="absolute inset-0 z-10 bg-gray-500/20 dark:bg-gray-900/30 backdrop-blur-[2px] pointer-events-none" />
+        )}
+        {scrollProgress && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-[2px] pointer-events-none">
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-xs text-gray-600 dark:text-gray-300">
+                Capturing {scrollProgress.current}/{scrollProgress.total}
+              </span>
+            </div>
+          </div>
         )}
         {dragState?.active && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-50/50 dark:bg-blue-900/20 pointer-events-none">
