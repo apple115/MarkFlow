@@ -1,9 +1,29 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+  type ReactNode,
+} from 'react';
+import * as Y from 'yjs';
 import { useMilkdown } from './useMilkdown';
 import { downloadLogs, log } from './logger';
 import { settings } from './settings';
-import { ensureRoomKey, isValidRoomKey, saveSyncConfig, syncUpload, syncRestore, type SyncConfig } from './sync';
-import { SyncConnection } from './syncConnection';
+import {
+  initializeStore,
+  saveNotebookStore,
+  createNotebook,
+  addNotebook,
+  updateNotebookState,
+  renameNotebook as renameNotebookInStore,
+  deleteNotebook as deleteNotebookFromStore,
+  setActiveNotebook,
+  getNotebook,
+  notebookStateToUint8Array,
+  NEW_NOTEBOOK_NAME,
+  type NotebookStore,
+} from './notebooks';
 
 function detectDragType(dt: DataTransfer): 'text' | 'image' | 'link' | 'file' {
   const types = Array.from(dt.types).map((t) => t.toLowerCase());
@@ -53,14 +73,30 @@ function DragTypeIcon({ type }: { type: 'text' | 'image' | 'link' | 'file' }) {
 }
 
 export default function App() {
-  const { rootRef, handle, loading, ydoc } = useMilkdown();
+  const [store, setStore] = useState<NotebookStore | null>(null);
+  const activeId = store?.activeId ?? '';
+  const activeNotebook = useMemo(
+    () => (store ? getNotebook(store, activeId) : undefined),
+    [store, activeId],
+  );
+  const initialState = useMemo(() => {
+    if (!activeNotebook) return undefined;
+    return notebookStateToUint8Array(activeNotebook);
+  }, [activeNotebook?.id]);
+
+  const { rootRef, handle, loading, ydoc } = useMilkdown(activeId, initialState);
+
   const [dragState, setDragState] = useState<{ active: boolean; type: 'text' | 'image' | 'link' | 'file' } | null>(null);
   const [status, setStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
   const [charCount, setCharCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [gearRoll, setGearRoll] = useState(0);
+  const [copyPressed, setCopyPressed] = useState(false);
+  const [ssFlash, setSsFlash] = useState(false);
+  const [clearSunk, setClearSunk] = useState(false);
   const [ssMenuOpen, setSsMenuOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState<{ current: number; total: number } | null>(null);
-  const [modal, setModal] = useState<'drag' | 'clear' | 'sync' | null>(null);
+  const [modal, setModal] = useState<'drag' | 'clear' | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [includeDate, setIncludeDate] = useState(settings.includeDate);
   const [includeTime, setIncludeTime] = useState(settings.includeTime);
@@ -69,57 +105,50 @@ export default function App() {
   const ssMenuRef = useRef<HTMLDivElement>(null);
   const clearRef = useRef<HTMLDivElement>(null);
 
-  const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(null);
-  const [syncCopied, setSyncCopied] = useState(false);
-  const [bindInput, setBindInput] = useState('');
-  const [serverInput, setServerInput] = useState('');
-  const [syncStatus, setSyncStatus] = useState<'offline' | 'online' | 'syncing'>('offline');
-
-  // Load sync config on mount
+  // Load notebook store on mount
   useEffect(() => {
-    ensureRoomKey().then(setSyncConfig);
+    initializeStore().then((s) => setStore(s)).catch((err) => log.error('Failed to load notebooks:', err));
   }, []);
 
-  // Restore from KV snapshot on first load, then upload periodically
-  useEffect(() => {
-    if (!syncConfig || loading) return;
-    // Restore snapshot on startup
-    syncRestore(ydoc, syncConfig).then((restored) => {
-      if (restored) log.info('Sync: restored snapshot from KV');
+  // Persist notebook state with debounce
+  const persistNotebookState = useCallback((id: string, state: Uint8Array) => {
+    setStore((prev) => {
+      if (!prev) return prev;
+      const updated = updateNotebookState(prev, id, state);
+      saveNotebookStore(updated).catch((err) => log.warn('Notebook save failed:', err));
+      return updated;
     });
-    // Upload snapshot every 30s
-    const id = setInterval(() => {
-      syncUpload(ydoc, syncConfig).catch((err) => log.warn('Sync upload failed:', err));
-    }, 30_000);
-    // Force upload on hide/close to avoid losing recent edits
-    const onHide = () => {
-      if (document.hidden) {
-        syncUpload(ydoc, syncConfig).catch((err) => log.warn('Sync flush failed:', err));
-      }
-    };
-    document.addEventListener('visibilitychange', onHide);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', onHide);
-    };
-  }, [syncConfig, loading, ydoc]);
+  }, []);
 
-  // P2P sync: create SyncConnection and broadcast Yjs updates
+  // Auto-save on Yjs update
   useEffect(() => {
-    if (!syncConfig || loading) return;
-    const conn = new SyncConnection(ydoc, syncConfig, setSyncStatus);
-    conn.connect();
-
-    const onUpdate = (update: Uint8Array) => {
-      conn.broadcastUpdate(update);
+    if (!ydoc || loading || !activeId) return;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const onUpdate = () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        const state = Y.encodeStateAsUpdate(ydoc);
+        persistNotebookState(activeId, state);
+      }, 1000);
     };
     ydoc.on('update', onUpdate);
-
     return () => {
       ydoc.off('update', onUpdate);
-      conn.destroy();
+      if (timeout) clearTimeout(timeout);
     };
-  }, [syncConfig, loading, ydoc]);
+  }, [ydoc, loading, activeId, persistNotebookState]);
+
+  // Flush current state when sidepanel is hidden
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden && ydoc && activeId) {
+        const state = Y.encodeStateAsUpdate(ydoc);
+        persistNotebookState(activeId, state);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [ydoc, activeId, persistNotebookState]);
 
   const hasContent = !loading && handle != null && !handle.isEmpty();
 
@@ -195,7 +224,6 @@ export default function App() {
       setStatus('copied');
       setTimeout(() => setStatus('idle'), 2000);
     } catch {
-      // Fallback: plain text only
       const md = handle.getMarkdown();
       const ta = document.createElement('textarea');
       ta.value = md;
@@ -217,6 +245,55 @@ export default function App() {
     setModal(null);
   }, [handle]);
 
+  const switchNotebook = useCallback(
+    async (id: string) => {
+      if (!store || id === store.activeId) return;
+      let nextStore = store;
+      if (ydoc) {
+        const state = Y.encodeStateAsUpdate(ydoc);
+        nextStore = updateNotebookState(nextStore, store.activeId, state);
+      }
+      nextStore = setActiveNotebook(nextStore, id);
+      setStore(nextStore);
+      await saveNotebookStore(nextStore);
+    },
+    [store, ydoc],
+  );
+
+  const createNotebookItem = useCallback(async () => {
+    if (!store) return;
+    let nextStore = store;
+    if (ydoc) {
+      const state = Y.encodeStateAsUpdate(ydoc);
+      nextStore = updateNotebookState(nextStore, store.activeId, state);
+    }
+    const notebook = createNotebook(`${NEW_NOTEBOOK_NAME} ${store.notebooks.length + 1}`);
+    nextStore = addNotebook(nextStore, notebook);
+    nextStore = setActiveNotebook(nextStore, notebook.id);
+    setStore(nextStore);
+    await saveNotebookStore(nextStore);
+  }, [store, ydoc]);
+
+  const renameNotebook = useCallback(
+    async (id: string, name: string) => {
+      if (!store) return;
+      const nextStore = renameNotebookInStore(store, id, name);
+      setStore(nextStore);
+      await saveNotebookStore(nextStore);
+    },
+    [store],
+  );
+
+  const deleteNotebookById = useCallback(
+    async (id: string) => {
+      if (!store) return;
+      const { store: nextStore } = deleteNotebookFromStore(store, id);
+      setStore(nextStore);
+      await saveNotebookStore(nextStore);
+    },
+    [store],
+  );
+
   async function getWebpageTab(): Promise<any | null> {
     const tabs = await browser.tabs.query({ active: true });
     for (const t of tabs) {
@@ -231,7 +308,6 @@ export default function App() {
     const img = new Image();
     await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = dataUrl; });
 
-    // Hard cap on pixel dimensions so pasted images don't blow up in Notes
     let scale = img.naturalWidth > maxWidth ? maxWidth / img.naturalWidth : 1;
     let quality = 0.92;
     let result = '';
@@ -347,7 +423,6 @@ export default function App() {
       const totalCaptures = Math.min(Math.ceil(scrollHeight / viewportHeight), maxCaptures);
 
       if (totalCaptures <= 1) {
-        // Page fits in viewport, just do a regular full screenshot
         setScrollProgress(null);
         await browser.tabs.sendMessage(tab.id, { type: 'finish-scroll-capture', originalScrollTop: scrollTop });
         doFullScreenshot();
@@ -364,10 +439,8 @@ export default function App() {
         chunks.push(dataUrl);
       }
 
-      // Restore scroll position
       await browser.tabs.sendMessage(tab.id, { type: 'finish-scroll-capture', originalScrollTop: scrollTop });
 
-      // Stitch chunks into one image
       const firstImg = new Image();
       await new Promise<void>((resolve, reject) => { firstImg.onload = () => resolve(); firstImg.onerror = reject; firstImg.src = chunks[0]; });
 
@@ -420,15 +493,30 @@ export default function App() {
     <div className="flex flex-col h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       {/* Header */}
       <header className="flex items-center justify-between h-8 px-4 border-b border-gray-200 dark:border-gray-700 shrink-0 relative">
-        <span
-          className={`w-2 h-2 rounded-full ${
-            hasContent ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-          }`}
-        />
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${
+              hasContent ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+            }`}
+          />
+          {store && (
+            <NotebookSelector
+              store={store}
+              onSwitch={switchNotebook}
+              onCreate={createNotebookItem}
+              onRename={renameNotebook}
+              onDelete={deleteNotebookById}
+            />
+          )}
+        </div>
         <div className="flex items-center gap-1.5">
           {/* Copy */}
           <button
-            onClick={handleCopy}
+            onClick={() => {
+              setCopyPressed(true);
+              setTimeout(() => setCopyPressed(false), 120);
+              handleCopy();
+            }}
             className={`p-1.5 rounded active:scale-90 active:opacity-60 transition-all duration-150 ${
               status === 'copied'
                 ? 'text-green-500'
@@ -437,7 +525,11 @@ export default function App() {
             title="Copy Markdown"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              style={{
+                transform: `scale(${copyPressed ? 0.85 : 1})`,
+                transition: 'transform 120ms ease-out',
+              }}>
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
@@ -445,14 +537,24 @@ export default function App() {
           {/* Screenshot dropdown */}
           <div ref={ssMenuRef} className="relative">
             <button
-              onClick={() => setSsMenuOpen((v) => !v)}
+              onClick={() => {
+                setSsFlash(true);
+                setTimeout(() => setSsFlash(false), 180);
+                setSsMenuOpen((v) => !v);
+              }}
               className="p-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 active:opacity-60 transition-all duration-150"
               title="Screenshot"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                <circle cx="12" cy="13" r="4" />
+                <circle
+                  cx="12"
+                  cy="13"
+                  r="4"
+                  fill={ssFlash ? 'white' : 'none'}
+                  style={{ transition: 'fill 120ms ease-out' }}
+                />
               </svg>
             </button>
             <div
@@ -508,7 +610,11 @@ export default function App() {
           {/* Clear */}
           <div ref={clearRef} className="relative">
             <button
-              onClick={() => setModal(modal === 'clear' ? null : 'clear')}
+              onClick={() => {
+                setClearSunk(true);
+                setTimeout(() => setClearSunk(false), 150);
+                setModal(modal === 'clear' ? null : 'clear');
+              }}
               disabled={!hasContent && modal !== 'clear'}
               className={`p-1.5 rounded active:scale-90 active:opacity-60 transition-all duration-150 ${
                 modal === 'clear' ? 'text-red-500' : 'text-gray-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed'
@@ -516,7 +622,11 @@ export default function App() {
               title="Clear"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                style={{
+                  transform: `translateY(${clearSunk ? 2 : 0}px)`,
+                  transition: 'transform 150ms ease-out',
+                }}>
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
               </svg>
@@ -536,7 +646,10 @@ export default function App() {
           {/* Settings gear */}
           <div ref={menuRef} className="relative">
             <button
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => {
+                setGearRoll((r) => (r + 1) % 1000);
+                setMenuOpen((v) => !v);
+              }}
               className={`p-1.5 rounded active:scale-90 active:opacity-60 transition-all duration-150 ${
                 menuOpen ? 'text-indigo-500' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
@@ -547,7 +660,10 @@ export default function App() {
                 className="w-4 h-4 transition-transform duration-200"
                 viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: menuOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                style={{
+                  transform: `rotate(${gearRoll * 360 + (menuOpen ? 90 : 0)}deg)`,
+                  transition: 'transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1)',
+                }}
               >
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -566,16 +682,6 @@ export default function App() {
                   <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
                 </svg>
                 拖拽设置
-              </button>
-              <button
-                onClick={() => { setMenuOpen(false); setModal('sync'); }}
-                className="flex items-center gap-2.5 w-full px-3 py-2.5 text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
-                同步设置
               </button>
               <button
                 onClick={() => { setMenuOpen(false); downloadLogs(); }}
@@ -687,114 +793,164 @@ export default function App() {
         </div>
       )}
 
-      {modal === 'sync' && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
-          onClick={() => setModal(null)}
-          style={{ animation: 'backdropIn 300ms ease forwards' }}
-        >
-          <div
-            className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200/60 dark:border-gray-700/60 w-72 p-4"
-            onClick={(e) => e.stopPropagation()}
-            style={{ animation: 'modalIn 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards' }}
-          >
-            <h3 className="text-sm font-medium mb-3 text-gray-700 dark:text-gray-200">同步设置</h3>
-
-            {/* Room Key */}
-            <div className="mb-3">
-              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">Room Key</label>
-              <div className="flex items-center gap-1.5">
-                <code className="flex-1 px-2 py-1.5 text-[11px] font-mono bg-gray-100 dark:bg-gray-700 rounded text-gray-700 dark:text-gray-300 truncate select-all">
-                  {syncConfig?.roomKey ?? '...'}
-                </code>
-                <button
-                  onClick={async () => {
-                    if (!syncConfig) return;
-                    await navigator.clipboard.writeText(syncConfig.roomKey);
-                    setSyncCopied(true);
-                    setTimeout(() => setSyncCopied(false), 2000);
-                  }}
-                  className="p-1.5 text-gray-400 hover:text-indigo-500 active:scale-90 transition-all"
-                  title="Copy"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>
-                  {syncCopied && <span className="sr-only">Copied!</span>}
-                </button>
-              </div>
-              {syncCopied && <p className="text-[10px] text-green-500 mt-0.5">已复制</p>}
-            </div>
-
-            {/* Bind device */}
-            <div className="mb-3">
-              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">绑定设备</label>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={bindInput}
-                  onChange={(e) => setBindInput(e.target.value)}
-                  placeholder="输入其他设备的 Room Key"
-                  className="flex-1 px-2 py-1.5 text-[11px] bg-gray-100 dark:bg-gray-700 rounded border-none outline-none focus:ring-1 focus:ring-indigo-500 text-gray-700 dark:text-gray-300 placeholder:text-gray-400"
-                />
-                <button
-                  onClick={async () => {
-                    if (!isValidRoomKey(bindInput) || !syncConfig) return;
-                    const newConfig = { ...syncConfig, roomKey: bindInput };
-                    await saveSyncConfig(newConfig);
-                    setSyncConfig(newConfig);
-                    setBindInput('');
-                    log.info('Bound to room:', bindInput);
-                  }}
-                  disabled={!isValidRoomKey(bindInput)}
-                  className="px-2.5 py-1.5 text-[11px] font-medium text-white bg-indigo-600 rounded hover:bg-indigo-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  绑定
-                </button>
-              </div>
-            </div>
-
-            {/* Server URL */}
-            <div className="mb-3">
-              <label className="text-[11px] text-gray-500 dark:text-gray-400 block mb-1">后端地址</label>
-              <input
-                type="text"
-                value={serverInput || syncConfig?.serverUrl || ''}
-                onChange={(e) => setServerInput(e.target.value)}
-                onBlur={async () => {
-                  if (!syncConfig || !serverInput) return;
-                  const newConfig = { ...syncConfig, serverUrl: serverInput };
-                  await saveSyncConfig(newConfig);
-                  setSyncConfig(newConfig);
-                  log.info('Server URL updated:', serverInput);
-                }}
-                placeholder={syncConfig?.serverUrl}
-                className="w-full px-2 py-1.5 text-[11px] bg-gray-100 dark:bg-gray-700 rounded border-none outline-none focus:ring-1 focus:ring-indigo-500 text-gray-700 dark:text-gray-300 placeholder:text-gray-400"
-              />
-            </div>
-
-            {/* Sync status */}
-            <div className="flex items-center gap-1.5 mb-3">
-              <span className={`w-1.5 h-1.5 rounded-full ${syncStatus === 'online' ? 'bg-green-500' : syncStatus === 'syncing' ? 'bg-yellow-500 animate-pulse' : 'bg-gray-400'}`} />
-              <span className="text-[11px] text-gray-500 dark:text-gray-400">
-                {syncStatus === 'online' ? '已连接' : syncStatus === 'syncing' ? '同步中' : '离线'}
-              </span>
-            </div>
-
-            <button
-              onClick={() => setModal(null)}
-              className="w-full px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Lightbox */}
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(null)} />}
+    </div>
+  );
+}
+
+function NotebookSelector({
+  store,
+  onSwitch,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  store: NotebookStore;
+  onSwitch: (id: string) => void;
+  onCreate: () => void;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setMenuFor(null);
+        setRenaming(null);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const active = store.notebooks.find((n) => n.id === store.activeId);
+
+  const startRename = (notebook: { id: string; name: string }) => {
+    setRenaming(notebook.id);
+    setRenameValue(notebook.name);
+    setMenuFor(null);
+  };
+
+  const commitRename = (id: string) => {
+    onRename(id, renameValue);
+    setRenaming(null);
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:hover:text-white transition-colors"
+      >
+        <span className="max-w-[120px] truncate">{active?.name ?? '笔记本'}</span>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className={`w-3 h-3 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      <div
+        className="absolute top-full left-0 mt-1 w-52 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-30"
+        style={{
+          opacity: open ? 1 : 0,
+          transform: open ? 'translateY(0) scaleY(1)' : 'translateY(-4px) scaleY(0.9)',
+          transformOrigin: 'top left',
+          pointerEvents: open ? 'auto' : 'none',
+          transition: 'opacity 150ms, transform 200ms cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
+      >
+        <div className="max-h-48 overflow-y-auto">
+          {store.notebooks.map((notebook) => (
+            <div
+              key={notebook.id}
+              className="group relative flex items-center gap-1 px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+            >
+              {renaming === notebook.id ? (
+                <input
+                  type="text"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename(notebook.id);
+                    if (e.key === 'Escape') setRenaming(null);
+                  }}
+                  onBlur={() => commitRename(notebook.id)}
+                  autoFocus
+                  className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-white dark:bg-gray-700 border border-indigo-300 dark:border-indigo-500 rounded outline-none text-gray-700 dark:text-gray-200"
+                />
+              ) : (
+                <>
+                  <button
+                    onClick={() => { onSwitch(notebook.id); setOpen(false); setMenuFor(null); }}
+                    className={`flex-1 min-w-0 text-left text-xs truncate ${
+                      notebook.id === store.activeId
+                        ? 'text-indigo-600 dark:text-indigo-400 font-medium'
+                        : 'text-gray-600 dark:text-gray-300'
+                    }`}
+                  >
+                    {notebook.name}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === notebook.id ? null : notebook.id); }}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded"
+                    title="更多"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="5" r="1" />
+                      <circle cx="12" cy="12" r="1" />
+                      <circle cx="12" cy="19" r="1" />
+                    </svg>
+                  </button>
+                </>
+              )}
+
+              {menuFor === notebook.id && renaming !== notebook.id && (
+                <div className="absolute right-1 top-7 w-20 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-40">
+                  <button
+                    onClick={() => startRename(notebook)}
+                    className="w-full px-2 py-1.5 text-[11px] text-left text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    onClick={() => { onDelete(notebook.id); setMenuFor(null); }}
+                    className="w-full px-2 py-1.5 text-[11px] text-left text-red-500 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  >
+                    删除
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={() => { onCreate(); setOpen(false); setMenuFor(null); }}
+          className="flex items-center gap-1.5 w-full px-3 py-2 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 border-t border-gray-100 dark:border-gray-700 transition-colors"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          新建笔记本
+        </button>
+      </div>
     </div>
   );
 }
@@ -817,7 +973,6 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.min(Math.max(scale * delta, 0.1), 10);
 
-    // Zoom around mouse pointer
     const scaleRatio = newScale / scale;
     const newTx = mouseX - (mouseX - translate.x) * scaleRatio;
     const newTy = mouseY - (mouseY - translate.y) * scaleRatio;
@@ -851,6 +1006,7 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
   return (
     <div
       ref={containerRef}
+      data-testid="lightbox-backdrop"
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm"
       onClick={onClose}
       onWheel={onWheel}
@@ -864,6 +1020,7 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
       }}
     >
       <img
+        data-testid="lightbox-image"
         src={src}
         alt=""
         draggable={false}
@@ -877,7 +1034,19 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
         }}
         onClick={(e) => e.stopPropagation()}
       />
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs pointer-events-none select-none">
+      <button
+        data-testid="lightbox-close"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        className="fixed top-1.5 right-1.5 z-[70] w-5 h-5 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition-colors"
+        style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.4)' }}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-2.5 h-2.5 text-white/80" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+      <div data-testid="lightbox-hint" className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/60 text-xs pointer-events-none select-none">
         Scroll to zoom · Drag to pan · Click outside to close
       </div>
     </div>

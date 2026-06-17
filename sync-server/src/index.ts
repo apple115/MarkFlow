@@ -62,7 +62,7 @@ app.get('/room/:roomId/signaling', (c) => {
   // Forward messages to other peers in the room
   server.addEventListener('message', (event) => {
     for (const peer of room) {
-      if (peer !== server && peer.readyState === WebSocket.READY_STATE_OPEN) {
+      if (peer !== server && peer.readyState === WebSocket.OPEN) {
         peer.send(event.data as string);
       }
     }
@@ -72,7 +72,7 @@ app.get('/room/:roomId/signaling', (c) => {
     room.delete(server);
     const leave = JSON.stringify({ type: 'peer-leave' });
     for (const peer of room) {
-      if (peer.readyState === WebSocket.READY_STATE_OPEN) {
+      if (peer.readyState === WebSocket.OPEN) {
         peer.send(leave);
       }
     }

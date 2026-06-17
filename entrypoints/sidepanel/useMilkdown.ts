@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import {
   Editor,
   rootCtx,
@@ -28,10 +28,14 @@ export interface MilkdownHandle {
 }
 
 /**
- * Hook to initialize a headless Milkdown editor.
- * Returns a callback ref to attach to the mount point div, plus handle/loading state.
+ * Hook to initialize a headless Milkdown editor bound to a single notebook.
+ * When `notebookId` changes the editor is destroyed and recreated with the
+ * notebook's initial Yjs state.
  */
-export function useMilkdown(): {
+export function useMilkdown(
+  notebookId: string,
+  initialState?: Uint8Array,
+): {
   rootRef: (el: HTMLDivElement | null) => void;
   handle: MilkdownHandle | null;
   loading: boolean;
@@ -41,50 +45,47 @@ export function useMilkdown(): {
   const handleRef = useRef<MilkdownHandle | null>(null);
   const ctxRef = useRef<any>(null);
   const ydocRef = useRef<Y.Doc>(new Y.Doc());
+  const elRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [handle, setHandle] = useState<MilkdownHandle | null>(null);
 
-  const rootRef = useCallback((el: HTMLDivElement | null) => {
-    if (!el) return;
-    if (editorRef.current) return;
+  const notebookIdRef = useRef(notebookId);
+  notebookIdRef.current = notebookId;
+  const initialStateRef = useRef(initialState);
+  initialStateRef.current = initialState;
 
-    let destroyed = false;
+  const destroyEditor = useCallback(() => {
+    if (editorRef.current) {
+      editorRef.current.destroy();
+      editorRef.current = null;
+    }
+    handleRef.current = null;
+    ctxRef.current = null;
+    if (ydocRef.current) {
+      ydocRef.current.destroy();
+      ydocRef.current = new Y.Doc();
+    }
+    setHandle(null);
+    setLoading(true);
+  }, []);
 
-    // Create Yjs sync plugin for Milkdown
-    const yXmlFragment = ydocRef.current.getXmlFragment('prosemirror');
+  const createEditor = useCallback(() => {
+    const el = elRef.current;
+    if (!el || editorRef.current) return;
+
+    const ydoc = ydocRef.current;
+    const state = initialStateRef.current;
+    if (state && state.length > 0) {
+      try {
+        Y.applyUpdate(ydoc, state);
+      } catch (err) {
+        log.warn('Failed to apply notebook initial state:', err);
+      }
+    }
+
+    const yXmlFragment = ydoc.getXmlFragment('prosemirror');
     const syncPlugin = $prose(() => ySyncPlugin(yXmlFragment));
 
-    const editor = Editor.make()
-      .config((ctx) => {
-        // Store ctx for external access
-        ctxRef.current = ctx;
-
-        ctx.set(rootCtx, el);
-        ctx.set(defaultValueCtx, '');
-        ctx.set(editorViewOptionsCtx, {
-          attributes: { class: 'milkdown-editor outline-none' },
-          editable: () => true,
-        });
-      })
-      .use(commonmark)
-      .use(history)
-      .use(clipboard)
-      .use(syncPlugin)
-      .create();
-
-    editor.then((ed) => {
-      if (destroyed) return;
-      editorRef.current = ed;
-      const h = buildHandle(ed);
-      handleRef.current = h;
-      setLoading(false);
-      setHandle(h);
-      log.info('Milkdown editor initialized');
-    });
-
-    // ── DOM-level drop handler ──
-    // Bypass Prosemirror's handleDrop prop mechanism entirely.
-    // Attach directly to the mount element to catch all drops.
     const onDragOver = (e: DragEvent) => {
       e.preventDefault();
       if (e.dataTransfer) {
@@ -125,21 +126,59 @@ export function useMilkdown(): {
     el.addEventListener('dragover', onDragOver);
     el.addEventListener('drop', onDrop);
 
-    // Cleanup stored on the element
-    (el as any).__cleanup = () => {
-      destroyed = true;
+    const editor = Editor.make()
+      .config((ctx) => {
+        ctxRef.current = ctx;
+
+        ctx.set(rootCtx, el);
+        ctx.set(defaultValueCtx, '');
+        ctx.set(editorViewOptionsCtx, {
+          attributes: { class: 'milkdown-editor outline-none' },
+          editable: () => true,
+        });
+      })
+      .use(commonmark)
+      .use(history)
+      .use(clipboard)
+      .use(syncPlugin)
+      .create();
+
+    editor.then((ed) => {
+      if (editorRef.current) return;
+      editorRef.current = ed;
+      const h = buildHandle(ed);
+      handleRef.current = h;
+      setLoading(false);
+      setHandle(h);
+      log.info('Milkdown editor initialized for notebook', notebookIdRef.current);
+    });
+
+    return () => {
       el.removeEventListener('dragover', onDragOver);
       el.removeEventListener('drop', onDrop);
-      if (editorRef.current) {
-        editorRef.current.destroy();
-      }
-      editorRef.current = null;
-      handleRef.current = null;
-      ctxRef.current = null;
-      setHandle(null);
-      setLoading(true);
     };
   }, []);
+
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    destroyEditor();
+    const cleanup = createEditor();
+    return () => {
+      if (cleanup) cleanup();
+      destroyEditor();
+    };
+  }, [notebookId, destroyEditor, createEditor]);
+
+  const rootRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      elRef.current = el;
+      if (!el) {
+        destroyEditor();
+      }
+    },
+    [destroyEditor],
+  );
 
   return { rootRef, handle, loading, ydoc: ydocRef.current };
 }
@@ -170,7 +209,6 @@ function buildHandle(editor: Editor): MilkdownHandle {
           const fragment = serializer.serializeFragment(view.state.doc.content);
           const wrap = document.createElement('div');
           wrap.appendChild(fragment);
-          // Limit image size for rich-text pasting (Notes ignores CSS, use attributes)
           wrap.querySelectorAll('img').forEach((img) => {
             img.setAttribute('width', '600');
             img.removeAttribute('height');

@@ -177,7 +177,7 @@ export class SyncConnection {
       log.info('Sync: data channel open with', peerId);
       const state = Y.encodeStateAsUpdate(this.ydoc);
       encrypt(state, this.config.roomKey).then((encrypted) => {
-        if (dc.readyState === 'open') dc.send(encrypted);
+        if (dc.readyState === 'open') dc.send(encrypted.buffer as ArrayBuffer);
       });
     };
 
@@ -208,7 +208,7 @@ export class SyncConnection {
     encrypt(update, this.config.roomKey).then((encrypted) => {
       for (const [, peer] of this.peers) {
         if (peer.dc?.readyState === 'open') {
-          peer.dc.send(encrypted);
+          peer.dc.send(encrypted.buffer as ArrayBuffer);
         }
       }
     });
