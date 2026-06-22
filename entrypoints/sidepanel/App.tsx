@@ -8,6 +8,7 @@ import {
 } from 'react';
 import * as Y from 'yjs';
 import { useMilkdown } from './useMilkdown';
+import { useAnkiCards, type AnkiCard, parseTags, formatTags } from './useAnkiCards';
 import { downloadLogs, log } from './logger';
 import { settings } from './settings';
 import {
@@ -85,6 +86,7 @@ export default function App() {
   }, [activeNotebook?.id]);
 
   const { rootRef, handle, loading, ydoc } = useMilkdown(activeId, initialState);
+  const { cards: ankiCards, addCard, deleteCard, updateCard } = useAnkiCards();
 
   const [dragState, setDragState] = useState<{ active: boolean; type: 'text' | 'image' | 'link' | 'file' } | null>(null);
   const [status, setStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
@@ -98,6 +100,7 @@ export default function App() {
   const [scrollProgress, setScrollProgress] = useState<{ current: number; total: number } | null>(null);
   const [modal, setModal] = useState<'drag' | 'clear' | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [mode, setMode] = useState<'note' | 'anki'>('note');
   const [includeDate, setIncludeDate] = useState(settings.includeDate);
   const [includeTime, setIncludeTime] = useState(settings.includeTime);
   const [includeSource, setIncludeSource] = useState(settings.includeSource);
@@ -534,6 +537,26 @@ export default function App() {
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
           </button>
+          {/* Anki mode toggle */}
+          <button
+            onClick={() => setMode((m) => (m === 'note' ? 'anki' : 'note'))}
+            className={`p-1.5 rounded active:scale-90 active:opacity-60 transition-all duration-150 ${
+              mode === 'anki'
+                ? 'text-indigo-500 bg-indigo-50 dark:bg-indigo-500/10'
+                : 'text-gray-400 hover:text-indigo-500'
+            }`}
+            title="Anki 模式"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+              <line x1="8" y1="14" x2="8" y2="14.01" />
+              <line x1="12" y1="14" x2="16" y2="14" />
+              <line x1="8" y1="17" x2="8" y2="17.01" />
+              <line x1="12" y1="17" x2="16" y2="17" />
+            </svg>
+          </button>
           {/* Screenshot dropdown */}
           <div ref={ssMenuRef} className="relative">
             <button
@@ -700,12 +723,12 @@ export default function App() {
         </div>
       </header>
 
-      {/* Editor area */}
+      {/* Editor / Anki area */}
       <div className="relative flex-1 overflow-hidden">
-        {modal === 'clear' && (
+        {mode === 'note' && modal === 'clear' && (
           <div className="absolute inset-0 z-10 bg-gray-500/20 dark:bg-gray-900/30 backdrop-blur-[2px] pointer-events-none" />
         )}
-        {scrollProgress && (
+        {mode === 'note' && scrollProgress && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-[2px] pointer-events-none">
             <div className="flex flex-col items-center gap-2">
               <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -715,7 +738,7 @@ export default function App() {
             </div>
           </div>
         )}
-        {dragState?.active && (
+        {mode === 'note' && dragState?.active && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-blue-50/50 dark:bg-blue-900/20 pointer-events-none">
             {/* Pulse rings */}
             <div className="absolute inset-0 flex items-center justify-center">
@@ -735,12 +758,16 @@ export default function App() {
           </div>
         )}
 
-        <EditorMount rootRef={rootRef} loading={loading} onDragStateChange={onDragStateChange} />
+        {mode === 'note' ? (
+          <EditorMount rootRef={rootRef} loading={loading} onDragStateChange={onDragStateChange} />
+        ) : (
+          <AnkiPanel cards={ankiCards} onAdd={addCard} onDelete={deleteCard} onUpdate={updateCard} />
+        )}
       </div>
 
       {/* Footer */}
       <footer className="flex items-center justify-between h-8 px-4 text-[10px] text-gray-400 dark:text-gray-600 border-t border-gray-100 dark:border-gray-800 shrink-0">
-        <span>{charCount} chars</span>
+        <span>{mode === 'anki' ? `${ankiCards.length} cards` : `${charCount} chars`}</span>
       </footer>
 
       {/* Modal overlay */}
@@ -951,6 +978,203 @@ function NotebookSelector({
           新建笔记本
         </button>
       </div>
+    </div>
+  );
+}
+
+function AnkiPanel({
+  cards,
+  onAdd,
+  onDelete,
+  onUpdate,
+}: {
+  cards: AnkiCard[];
+  onAdd: (front: string, back: string, tags?: string[]) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onUpdate: (id: string, patch: { front?: string; back?: string; tags?: string[] }) => Promise<void>;
+}) {
+  const [front, setFront] = useState('');
+  const [back, setBack] = useState('');
+  const [tags, setTags] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editFront, setEditFront] = useState('');
+  const [editBack, setEditBack] = useState('');
+  const [editTags, setEditTags] = useState('');
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuFor(null);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const handleAdd = () => {
+    if (!front.trim() && !back.trim()) return;
+    onAdd(front, back, parseTags(tags));
+    setFront('');
+    setBack('');
+    setTags('');
+  };
+
+  const startEdit = (card: AnkiCard) => {
+    setEditing(card.id);
+    setEditFront(card.front);
+    setEditBack(card.back);
+    setEditTags(formatTags(card.tags));
+    setMenuFor(null);
+  };
+
+  const commitEdit = (id: string) => {
+    onUpdate(id, { front: editFront, back: editBack, tags: parseTags(editTags) });
+    setEditing(null);
+  };
+
+  return (
+    <div className="h-full overflow-y-auto p-4">
+      <div className="space-y-3 mb-5">
+        <input
+          type="text"
+          value={front}
+          onChange={(e) => setFront(e.target.value)}
+          placeholder="正面"
+          className="w-full px-3 py-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
+        />
+        <textarea
+          value={back}
+          onChange={(e) => setBack(e.target.value)}
+          placeholder="背面"
+          rows={3}
+          className="w-full px-3 py-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100 placeholder:text-gray-400 resize-none"
+        />
+        <input
+          type="text"
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          placeholder="标签，用逗号分隔"
+          className="w-full px-3 py-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
+        />
+        <button
+          onClick={handleAdd}
+          className="w-full px-3 py-2 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+        >
+          添加卡片
+        </button>
+      </div>
+
+      {cards.length === 0 ? (
+        <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-8">暂无卡片</p>
+      ) : (
+        <div className="space-y-3" ref={menuRef}>
+          {cards.map((card) => (
+            <div
+              key={card.id}
+              className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
+            >
+              {editing === card.id ? (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={editFront}
+                    onChange={(e) => setEditFront(e.target.value)}
+                    className="w-full px-2 py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100"
+                  />
+                  <textarea
+                    value={editBack}
+                    onChange={(e) => setEditBack(e.target.value)}
+                    rows={2}
+                    className="w-full px-2 py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100 resize-none"
+                  />
+                  <input
+                    type="text"
+                    value={editTags}
+                    onChange={(e) => setEditTags(e.target.value)}
+                    placeholder="标签，用逗号分隔"
+                    className="w-full px-2 py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded outline-none focus:border-indigo-400 dark:focus:border-indigo-500 text-gray-800 dark:text-gray-100 placeholder:text-gray-400"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => commitEdit(card.id)}
+                      className="flex-1 px-2 py-1 text-[11px] font-medium text-white bg-indigo-600 rounded hover:bg-indigo-700 transition-colors"
+                    >
+                      保存
+                    </button>
+                    <button
+                      onClick={() => setEditing(null)}
+                      className="flex-1 px-2 py-1 text-[11px] text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-gray-800 dark:text-gray-100 mb-1">{card.front}</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap">{card.back}</p>
+                    {card.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {card.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="px-1.5 py-0.5 text-[10px] rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="relative shrink-0 self-start h-7">
+                    <button
+                      onClick={() => setMenuFor(menuFor === card.id ? null : card.id)}
+                      className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors"
+                      title="更多"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="5" r="1" />
+                        <circle cx="12" cy="12" r="1" />
+                        <circle cx="12" cy="19" r="1" />
+                      </svg>
+                    </button>
+                    {menuFor === card.id && (
+                      <div className="absolute right-0 top-full mt-1 w-7 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-30">
+                        <button
+                          onClick={() => startEdit(card)}
+                          className="flex items-center justify-center w-7 h-7 text-gray-500 hover:text-indigo-500 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                          title="编辑"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4L18.5 2.5z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => { onDelete(card.id); setMenuFor(null); }}
+                          className="flex items-center justify-center w-7 h-7 text-gray-500 hover:text-red-500 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors border-t border-gray-100 dark:border-gray-700"
+                          title="删除"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
