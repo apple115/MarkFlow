@@ -1,6 +1,6 @@
 {
   "name": "markflow",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "A minimalist Chrome sidepanel extension for capturing web content as Markdown",
   "type": "module",
   "private": true,

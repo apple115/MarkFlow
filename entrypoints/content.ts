@@ -87,7 +87,9 @@ function getFavicon(): string | null {
   return null;
 }
 
-async function startScreenshotMode(): Promise<{ x: number; y: number; width: number; height: number; dpr: number } | null> {
+async function startScreenshotMode(): Promise<
+  { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number; dpr: number } | null
+> {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0; z-index: 2147483647;
@@ -101,7 +103,7 @@ async function startScreenshotMode(): Promise<{ x: number; y: number; width: num
     position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.7); color: white; padding: 6px 14px;
     border-radius: 6px; font-size: 13px; font-family: system-ui, sans-serif;
-    pointer-events: none; z-index: 2147483648; white-space: nowrap;
+    pointer-events: none; z-index: 2147483647; white-space: nowrap;
   `;
 
   document.body.appendChild(overlay);
@@ -112,9 +114,17 @@ async function startScreenshotMode(): Promise<{ x: number; y: number; width: num
   let resolved = false;
 
   return new Promise((resolve) => {
+    const removeListeners = () => {
+      document.removeEventListener('keydown', onKeyDown);
+      overlay.removeEventListener('mousedown', onMouseDown);
+      overlay.removeEventListener('mousemove', onMouseMove);
+      overlay.removeEventListener('mouseup', onMouseUp);
+    };
+
     const cleanup = () => {
       if (resolved) return;
       resolved = true;
+      removeListeners();
       overlay.remove();
       hint.remove();
       resolve(null);
@@ -132,7 +142,7 @@ async function startScreenshotMode(): Promise<{ x: number; y: number; width: num
       box.style.cssText = `
         position: fixed; border: 2px dashed #6366f1;
         background: rgba(99,102,241,0.12);
-        pointer-events: none; z-index: 2147483648;
+        pointer-events: none; z-index: 2147483647;
       `;
       overlay.appendChild(box);
     };
@@ -150,10 +160,7 @@ async function startScreenshotMode(): Promise<{ x: number; y: number; width: num
     };
 
     const onMouseUp = (e: MouseEvent) => {
-      document.removeEventListener('keydown', onKeyDown);
-      overlay.removeEventListener('mousedown', onMouseDown);
-      overlay.removeEventListener('mousemove', onMouseMove);
-      overlay.removeEventListener('mouseup', onMouseUp);
+      removeListeners();
 
       const w = Math.abs(e.clientX - startX);
       const h = Math.abs(e.clientY - startY);
@@ -169,6 +176,8 @@ async function startScreenshotMode(): Promise<{ x: number; y: number; width: num
           y: Math.min(startY, e.clientY),
           width: w,
           height: h,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
           dpr: window.devicePixelRatio || 1,
         });
       } else {

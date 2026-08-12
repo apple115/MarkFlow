@@ -376,11 +376,15 @@ export default function App() {
       const img = new Image();
       await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = reject; img.src = dataUrl; });
 
-      const dpr = rect.dpr || 1;
-      const sx = rect.x * dpr;
-      const sy = rect.y * dpr;
-      const sw = rect.width * dpr;
-      const sh = rect.height * dpr;
+      // Use the actual scale of the captured image relative to the CSS viewport,
+      // rather than trusting window.devicePixelRatio, which can diverge under zoom
+      // or when the sidepanel changes the visible viewport size.
+      const scaleX = rect.viewportWidth ? img.naturalWidth / rect.viewportWidth : (rect.dpr || 1);
+      const scaleY = rect.viewportHeight ? img.naturalHeight / rect.viewportHeight : (rect.dpr || 1);
+      const sx = rect.x * scaleX;
+      const sy = rect.y * scaleY;
+      const sw = rect.width * scaleX;
+      const sh = rect.height * scaleY;
 
       const canvas = document.createElement('canvas');
       canvas.width = rect.width;
