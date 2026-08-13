@@ -23,6 +23,12 @@ jobs:
 
       - run: pnpm typecheck
 
+      - name: Install and typecheck sync-server
+        working-directory: sync-server
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+
       - run: pnpm zip
 
       - name: Upload extension artifact

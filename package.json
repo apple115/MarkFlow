@@ -11,7 +11,7 @@
     "build:firefox": "wxt build --browser firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip --browser firefox",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "wxt prepare && tsc --noEmit",
     "test:e2e": "wxt build && playwright test",
     "test:e2e:ui": "wxt build && playwright test --ui",
     "test:e2e:debug": "wxt build && playwright test --debug"
