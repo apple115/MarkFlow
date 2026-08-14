@@ -36,3 +36,4 @@ jobs:
         with:
           name: markflow-extension
           path: .output/*.zip
+          include-hidden-files: true
