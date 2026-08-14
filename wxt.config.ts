@@ -12,7 +12,7 @@ export default defineConfig({
     description: 'Capture web content as Markdown — drag, refine, export.',
     version,
     permissions: ['activeTab', 'sidePanel', 'storage'],
-    host_permissions: ['https://*/*', 'http://*/*'],
+    host_permissions: ['<all_urls>'],
     icons: {
       16: 'icon/16.png',
       32: 'icon/32.png',
