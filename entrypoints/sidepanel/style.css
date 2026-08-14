@@ -40,9 +40,16 @@
 .milkdown-root {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+  display: flex;
+  flex-direction: column;
 }
 .milkdown-root:hover {
   scrollbar-color: rgba(155, 155, 155, 0.3) transparent;
+}
+.milkdown-root > .milkdown {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 .milkdown-root::-webkit-scrollbar { width: 4px; }
 .milkdown-root::-webkit-scrollbar-track { background: transparent; }
@@ -55,6 +62,7 @@
   font-size: 14px;
   line-height: 1.6;
   min-height: 100%;
+  flex: 1 0 auto;
 }
 
 .ProseMirror > * + * {
