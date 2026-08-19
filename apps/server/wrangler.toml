@@ -1,0 +1,12 @@
+name = "markflow-sync"
+main = "src/index.ts"
+compatibility_date = "2025-04-20"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "d131eff68d624170b6d5fe89b0987962"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "markflow-notes"
+database_id = "00000000-0000-0000-0000-000000000000"
