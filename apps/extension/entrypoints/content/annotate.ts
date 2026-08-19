@@ -14,7 +14,7 @@
 
 import { browser } from 'wxt/browser';
 
-type Tool = 'pen' | 'eraser';
+type Tool = 'pen' | 'eraser' | 'select';
 
 interface Session {
   destroy: () => void;
@@ -224,6 +224,10 @@ function createSession(): Session {
   const toolbar = document.createElement('div');
   toolbar.className = 'toolbar';
 
+  const selectBtn = makeIconButton(
+    '<path d="M4 3l7 17 2.5-7.5L21 10 4 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+    '鼠标（与页面交互，墨迹保留）',
+  );
   const penBlack = makeColorButton('#111111', '黑笔');
   const penRed = makeColorButton('#dc2626', '红笔');
   const eraserBtn = makeIconButton(
@@ -250,22 +254,28 @@ function createSession(): Session {
   });
 
   const refreshActive = () => {
+    selectBtn.classList.toggle('active', tool === 'select');
     penBlack.classList.toggle('active', tool === 'pen' && color === '#111111');
     penRed.classList.toggle('active', tool === 'pen' && color === '#dc2626');
     eraserBtn.classList.toggle('active', tool === 'eraser');
   };
 
-  const pickPen = (c: string) => {
-    tool = 'pen';
-    color = c;
+  // 'select' mode: canvas stops intercepting pointer events so the page can be
+  // scrolled/clicked; ink stays on screen and drawing resumes on tool switch.
+  const pickTool = (t: Tool) => {
+    tool = t;
+    base.style.pointerEvents = t === 'select' ? 'none' : 'auto';
     refreshActive();
   };
+
+  const pickPen = (c: string) => {
+    color = c;
+    pickTool('pen');
+  };
+  selectBtn.addEventListener('click', () => pickTool('select'));
   penBlack.addEventListener('click', () => pickPen('#111111'));
   penRed.addEventListener('click', () => pickPen('#dc2626'));
-  eraserBtn.addEventListener('click', () => {
-    tool = 'eraser';
-    refreshActive();
-  });
+  eraserBtn.addEventListener('click', () => pickTool('eraser'));
   clearBtn.addEventListener('click', () => {
     baseCtx.save();
     baseCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -274,7 +284,7 @@ function createSession(): Session {
   });
   exitBtn.addEventListener('click', () => toggleAnnotation());
 
-  toolbar.append(penBlack, penRed, sep(), slider, sep(), eraserBtn, clearBtn, sep(), exitBtn);
+  toolbar.append(selectBtn, penBlack, penRed, sep(), slider, sep(), eraserBtn, clearBtn, sep(), exitBtn);
   refreshActive();
 
   shadow.append(base, predict, toolbar);
